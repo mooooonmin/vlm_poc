@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 from typing import Any
 
@@ -238,8 +239,27 @@ async def api_analyze_video(
 def main() -> None:
     """개발용 FastAPI 서버를 실행합니다."""
     host = os.environ.get("APP_HOST", "127.0.0.1")
-    port = int(os.environ.get("APP_PORT", "8080"))
+    requested_port = int(os.environ.get("APP_PORT", "8080"))
+    port = find_available_port(host, requested_port)
+    if port != requested_port:
+        print(f"요청한 포트 {requested_port}는 이미 사용 중입니다. 대신 {port} 포트로 실행합니다.")
+    print(f"영상 VLM 분석 PoC 화면: http://{host}:{port}")
     uvicorn.run("app:app", host=host, port=port, reload=False)
+
+
+def find_available_port(host: str, start_port: int) -> int:
+    """
+    지정한 포트가 사용 중이면 다음 포트를 순서대로 찾아 반환합니다.
+
+    개발 중에는 이전 FastAPI 프로세스가 8080을 계속 점유하는 경우가 자주 있습니다.
+    이 함수는 8080이 막혀 있더라도 8081, 8082처럼 비어 있는 포트를 찾아 앱을 실행하게 해줍니다.
+    """
+    for port in range(start_port, start_port + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex((host, port)) != 0:
+                return port
+    raise RuntimeError(f"사용 가능한 포트를 찾지 못했습니다: {start_port}~{start_port + 19}")
 
 
 if __name__ == "__main__":
