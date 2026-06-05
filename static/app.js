@@ -1,30 +1,57 @@
+let activeJobId = null;
+let jobPollTimer = null;
+
+const lifecycleLabels = {
+  not_started: "vLLM 미시작",
+  starting: "vLLM 시작 중",
+  model_download: "모델 다운로드 중",
+  model_loading: "모델 로딩 중",
+  api_starting: "API 시작 중",
+  api_ready: "API ready",
+  failed: "실패",
+};
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || data.error || "요청이 실패했습니다.");
+  }
+  return data;
+}
+
 async function refreshRuntime() {
-  const [gpu, vllm, timeslicing] = await Promise.all([
-    fetch("/api/gpu-status").then((response) => response.json()),
-    fetch("/api/vllm-status").then((response) => response.json()),
-    fetch("/api/timeslicing").then((response) => response.json()),
+  const [gpu, vllm, timeslicing, config] = await Promise.all([
+    fetchJson("/api/gpu-status"),
+    fetchJson("/api/vllm-status"),
+    fetchJson("/api/timeslicing"),
+    fetchJson("/api/config"),
   ]);
+
+  const lifecycle = lifecycleLabels[vllm.lifecycle_stage] || vllm.lifecycle_stage || "상태 불명";
   const vllmState = vllm.running
-    ? "실행 중 - Qwen 모델이 GPU 메모리를 점유하고 있습니다. 테스트가 끝나면 vLLM 종료 / GPU 해제를 누르세요."
-    : "중지됨 - GPU 모델 서버가 떠 있지 않습니다.";
-  document.getElementById("runtimeStatus").textContent =
-    `GPU: ${gpu.ok ? "확인됨" : "확인 실패"} / vLLM: ${vllmState} ${vllm.message || ""}`;
-  document.getElementById("runtimeDetail").textContent =
-    JSON.stringify({ gpu, vllm, timeslicing }, null, 2);
+    ? "vLLM API가 응답 중입니다. 테스트가 끝나면 vLLM 종료 / GPU 해제 버튼으로 컨테이너를 내리세요."
+    : "vLLM API가 아직 응답하지 않습니다. 시작 직후라면 모델 다운로드/로딩이 끝날 때까지 기다리세요.";
+
+  $("runtimeStatus").textContent = `GPU: ${gpu.ok ? "확인됨" : "확인 실패"} / vLLM: ${lifecycle} - ${vllmState}`;
+  $("runtimeBadges").innerHTML = [
+    `모델: ${config.default_model_id}`,
+    `MAX_MODEL_LEN: ${config.max_model_len}`,
+    `GPU_MEMORY_UTILIZATION: ${config.gpu_memory_utilization}`,
+    `HF_TOKEN: ${config.hf_token_configured ? "설정됨" : "미설정"}`,
+    `분석 처리: ${config.processing_mode}`,
+  ].map((text) => `<span>${escapeHtml(text)}</span>`).join("");
+  $("runtimeDetail").textContent = JSON.stringify({ gpu, vllm, timeslicing, config }, null, 2);
 }
 
 async function startVllm() {
-  document.getElementById("runtimeStatus").textContent =
-    "vLLM 컨테이너 시작 요청 중... 모델이 GPU에 로드되면 VRAM을 계속 점유합니다.";
-  const response = await fetch("/api/start-vllm", { method: "POST" });
-  const data = await response.json();
-  document.getElementById("runtimeDetail").textContent = JSON.stringify(data, null, 2);
-  if (!data.ok) {
-    document.getElementById("runtimeStatus").textContent = data.message || "vLLM 시작 실패";
-    return;
-  }
-  document.getElementById("runtimeStatus").textContent =
-    "vLLM 컨테이너 시작 완료. 모델 다운로드/로딩 상태를 자동 확인합니다...";
+  $("runtimeStatus").textContent = "vLLM 컨테이너 시작 요청 중입니다. Docker 이미지 pull 또는 모델 로딩은 오래 걸릴 수 있습니다.";
+  const data = await fetchJson("/api/start-vllm", { method: "POST" });
+  $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
   await waitForVllmReady();
 }
 
@@ -32,80 +59,138 @@ async function waitForVllmReady() {
   const maxAttempts = 120;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
-    const [gpu, vllm, timeslicing] = await Promise.all([
-      fetch("/api/gpu-status").then((response) => response.json()),
-      fetch("/api/vllm-status").then((response) => response.json()),
-      fetch("/api/timeslicing").then((response) => response.json()),
-    ]);
-    document.getElementById("runtimeDetail").textContent =
-      JSON.stringify({ gpu, vllm, timeslicing }, null, 2);
+    const vllm = await fetchJson("/api/vllm-status");
+    const lifecycle = lifecycleLabels[vllm.lifecycle_stage] || vllm.lifecycle_stage || "상태 불명";
+    $("runtimeDetail").textContent = JSON.stringify({ vllm }, null, 2);
+    $("runtimeStatus").textContent = `vLLM 준비 확인 중 (${attempt}/${maxAttempts}) - ${lifecycle}`;
     if (vllm.running) {
-      document.getElementById("runtimeStatus").textContent =
-        "vLLM 준비 완료 - Qwen 모델이 GPU 메모리를 점유하고 있습니다. 이제 영상 분석을 실행할 수 있습니다.";
+      await refreshRuntime();
       return;
     }
-    document.getElementById("runtimeStatus").textContent =
-      `vLLM 로딩 대기 중 (${attempt}/${maxAttempts}) - 첫 실행은 이미지/모델 다운로드 때문에 오래 걸릴 수 있습니다.`;
   }
-  document.getElementById("runtimeStatus").textContent =
-    "vLLM 준비 확인 시간이 초과되었습니다. CUDA / vLLM 상세의 Docker logs를 확인하세요.";
+  $("runtimeStatus").textContent = "vLLM 준비 확인 시간이 초과됐습니다. vLLM 로그 버튼으로 Docker 로그를 확인하세요.";
 }
 
 async function stopVllm() {
-  document.getElementById("runtimeStatus").textContent =
-    "vLLM 컨테이너 종료 요청 중... 완료되면 Qwen 모델이 내려가고 GPU 메모리가 반환됩니다.";
-  const response = await fetch("/api/stop-vllm", { method: "POST" });
-  const data = await response.json();
-  document.getElementById("runtimeDetail").textContent = JSON.stringify(data, null, 2);
+  $("runtimeStatus").textContent = "vLLM 컨테이너 종료 요청 중입니다. 완료되면 GPU 메모리가 반환됩니다.";
+  const data = await fetchJson("/api/stop-vllm", { method: "POST" });
+  $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
   await refreshRuntime();
 }
 
-async function collectTimeslicingLogs() {
-  document.getElementById("runtimeStatus").textContent =
-    "time-slicing 관련 Kubernetes/GPU 로그를 수집 중입니다...";
-  const response = await fetch("/api/timeslicing/logs", { method: "POST" });
-  const data = await response.json();
-  document.getElementById("runtimeDetail").textContent = JSON.stringify(data, null, 2);
-  document.getElementById("runtimeStatus").textContent =
-    `time-slicing 로그 수집 완료: ${data.log_dir || "로그 경로 없음"}`;
+async function loadVllmLogs() {
+  const data = await fetchJson("/api/vllm/logs?lines=160");
+  $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
+  $("runtimeStatus").textContent = "vLLM 컨테이너 로그 tail을 불러왔습니다.";
 }
 
-document.getElementById("analyzeForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const button = document.getElementById("analyzeBtn");
-  const status = document.getElementById("analyzeStatus");
-  const answer = document.getElementById("answer");
-  const rawJson = document.getElementById("rawJson");
-  const frames = document.getElementById("frames");
+async function collectTimeslicingLogs() {
+  $("runtimeStatus").textContent = "time-slicing 관련 Kubernetes/GPU 로그를 수집 중입니다.";
+  const data = await fetchJson("/api/timeslicing/logs", { method: "POST" });
+  $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
+  $("runtimeStatus").textContent =
+    `time-slicing 로그 수집 완료: ${data.log_dir || "로그 경로 없음"}. 로컬 Windows에서는 실제 적용이 아니라 검증 근거 수집입니다.`;
+}
 
+async function submitAnalysis(event) {
+  event.preventDefault();
+  const button = $("analyzeBtn");
   button.disabled = true;
-  status.textContent = "영상 저장, 프레임 추출, vLLM 분석 요청을 진행 중입니다...";
-  answer.textContent = "";
-  rawJson.textContent = "";
-  frames.innerHTML = "";
+  $("analyzeStatus").textContent = "영상 분석 작업을 생성하는 중입니다.";
+  clearResult();
 
   try {
     const formData = new FormData(event.target);
-    const response = await fetch("/api/analyze-video", { method: "POST", body: formData });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.detail || data.error || "분석 요청 실패");
-    }
-    status.textContent = `완료: ${data.video_info.sampled_frame_count}개 프레임 분석`;
-    answer.textContent = data.answer || "(응답 텍스트 없음)";
-    rawJson.textContent = JSON.stringify(data, null, 2);
-    frames.innerHTML = data.frames.map((frame) => `
-      <div class="frame-card">
-        <img src="${frame.preview_url}" alt="sample frame ${frame.index}" />
-        <div>#${frame.index} / ${frame.timestamp_sec.toFixed(2)}초</div>
-      </div>
-    `).join("");
+    const job = await fetchJson("/api/jobs/video", { method: "POST", body: formData });
+    activeJobId = job.job_id;
+    $("analyzeStatus").textContent = `작업 생성 완료: ${activeJobId}`;
+    renderJob(job);
+    await refreshJobs();
+    startJobPolling(activeJobId);
   } catch (error) {
-    status.textContent = "오류 발생";
-    answer.textContent = String(error);
+    $("analyzeStatus").textContent = "작업 생성 실패";
+    $("answer").textContent = String(error);
   } finally {
     button.disabled = false;
   }
-});
+}
 
+function startJobPolling(jobId) {
+  if (jobPollTimer) {
+    clearInterval(jobPollTimer);
+  }
+  jobPollTimer = setInterval(async () => {
+    try {
+      const job = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`);
+      renderJob(job);
+      await refreshJobs();
+      if (job.status === "done" || job.status === "failed") {
+        clearInterval(jobPollTimer);
+        jobPollTimer = null;
+      }
+    } catch (error) {
+      $("jobStatus").textContent = String(error);
+    }
+  }, 2500);
+}
+
+async function refreshJobs() {
+  const data = await fetchJson("/api/jobs?limit=10");
+  $("jobList").innerHTML = data.jobs.map((job) => `
+    <button type="button" class="job-item ${job.job_id === activeJobId ? "active" : ""}" onclick="selectJob('${job.job_id}')">
+      <strong>${escapeHtml(job.status)}</strong>
+      <span>${escapeHtml(job.source?.name || job.job_id)}</span>
+      <small>${escapeHtml(job.updated_at || "")}</small>
+    </button>
+  `).join("") || "<div class=\"hint\">최근 작업이 없습니다.</div>";
+}
+
+async function selectJob(jobId) {
+  activeJobId = jobId;
+  const job = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`);
+  renderJob(job);
+  if (job.status === "queued" || job.status === "running") {
+    startJobPolling(jobId);
+  }
+  await refreshJobs();
+}
+
+function renderJob(job) {
+  const sampledCount = job.video_info?.sampled_frame_count ?? 0;
+  $("jobStatus").textContent = `작업 ${job.job_id} / 상태: ${job.status} / ${job.message || ""}`;
+  $("analyzeStatus").textContent = `현재 작업: ${job.job_id} (${job.status})`;
+  $("frames").innerHTML = (job.frames || []).map((frame) => `
+    <div class="frame-card">
+      <img src="${frame.preview_url}" alt="sample frame ${frame.index}" />
+      <div>#${frame.index} / ${Number(frame.timestamp_sec || 0).toFixed(2)}초</div>
+    </div>
+  `).join("");
+  if (job.status === "done") {
+    $("answer").textContent = job.answer || "(응답 텍스트 없음)";
+  } else if (job.status === "failed") {
+    $("answer").textContent = job.error?.message || job.message || "분석 실패";
+  } else {
+    $("answer").textContent = `분석 진행 중입니다. 추출된 프레임: ${sampledCount}개`;
+  }
+  $("rawJson").textContent = JSON.stringify(job, null, 2);
+}
+
+function clearResult() {
+  $("jobStatus").textContent = "작업을 준비 중입니다.";
+  $("answer").textContent = "";
+  $("rawJson").textContent = "";
+  $("frames").innerHTML = "";
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+$("analyzeForm").addEventListener("submit", submitAnalysis);
 refreshRuntime();
+refreshJobs();

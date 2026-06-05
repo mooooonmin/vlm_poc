@@ -50,12 +50,17 @@ def create_job_dir(base_dir: Path) -> Path:
     return job_dir
 
 
-async def save_upload_file(upload: UploadFile, job_dir: Path) -> Path:
+async def save_upload_file(upload: UploadFile, job_dir: Path, max_bytes: int | None = None) -> Path:
     """업로드된 영상을 작업 폴더에 저장합니다."""
     suffix = Path(upload.filename or "upload.mp4").suffix or ".mp4"
     output_path = job_dir / f"input{suffix}"
+    written = 0
     with output_path.open("wb") as file:
         while chunk := await upload.read(1024 * 1024):
+            written += len(chunk)
+            if max_bytes is not None and written > max_bytes:
+                output_path.unlink(missing_ok=True)
+                raise ValueError(f"업로드 파일이 PoC 제한을 초과했습니다. 제한: {max_bytes} bytes")
             file.write(chunk)
     return output_path
 

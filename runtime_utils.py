@@ -204,6 +204,8 @@ def get_vllm_status() -> dict[str, Any]:
     except requests.RequestException as error:
         endpoint_error = str(error)
 
+    lifecycle_stage = infer_vllm_lifecycle_stage(endpoint_ok, docker_result, logs_result, endpoint_error)
+
     if endpoint_ok:
         message = "vLLM 서버가 실행 중이며 /v1/models 엔드포인트가 응답합니다."
     elif not docker_version.get("ok"):
@@ -226,9 +228,59 @@ def get_vllm_status() -> dict[str, Any]:
         "docker": docker_result,
         "logs": logs_result,
         "start_job": get_vllm_start_job(),
+        "lifecycle_stage": lifecycle_stage,
+        "config": {
+            "model_id": DEFAULT_MODEL_ID,
+            "container_name": DEFAULT_CONTAINER_NAME,
+            "image": DEFAULT_VLLM_IMAGE,
+            "gpu_memory_utilization": DEFAULT_GPU_MEMORY_UTILIZATION,
+            "max_model_len": DEFAULT_MAX_MODEL_LEN,
+            "hf_token_configured": bool(os.environ.get("HF_TOKEN")),
+        },
         "endpoint_ok": endpoint_ok,
         "endpoint_error": endpoint_error,
     }
+
+
+def infer_vllm_lifecycle_stage(
+    endpoint_ok: bool,
+    docker_result: dict[str, Any],
+    logs_result: dict[str, Any],
+    endpoint_error: str,
+) -> str:
+    """
+    vLLM이 어느 단계에 있는지 화면에 보여주기 위한 간단한 분류입니다.
+
+    Docker/vLLM은 모델 다운로드, weight 로딩, torch.compile, warmup을 거친 뒤에야
+    `/v1/models`가 정상 응답합니다. 사용자는 이 단계 구분을 통해 "멈춤"인지 "준비 중"인지 판단할 수 있습니다.
+    """
+    if endpoint_ok:
+        return "api_ready"
+    docker_text = f"{docker_result.get('stdout', '')}\n{docker_result.get('stderr', '')}".lower()
+    logs_text = f"{logs_result.get('stdout', '')}\n{logs_result.get('stderr', '')}\n{endpoint_error}".lower()
+    if DEFAULT_CONTAINER_NAME.lower() not in docker_text:
+        return "not_started"
+    if "exited" in docker_text:
+        return "failed"
+    if "time spent downloading weights" in logs_text or "loading weights took" in logs_text:
+        return "model_loading"
+    if "downloading" in logs_text or ".incomplete" in logs_text or "hf hub" in logs_text:
+        return "model_download"
+    if "starting vllm server" in logs_text or "application startup complete" in logs_text:
+        return "api_starting"
+    if "error" in logs_text or "traceback" in logs_text:
+        return "failed"
+    return "starting"
+
+
+def get_vllm_logs(lines: int = 120) -> dict[str, Any]:
+    """
+    vLLM 컨테이너 로그 tail을 반환합니다.
+
+    화면에서 모델 다운로드/로딩/torch.compile 진행 상황을 바로 볼 수 있게 하는 용도입니다.
+    """
+    safe_lines = max(20, min(int(lines), 500))
+    return run_command(["docker", "logs", "--tail", str(safe_lines), DEFAULT_CONTAINER_NAME], timeout=10)
 
 
 def get_vllm_start_job() -> dict[str, Any]:
