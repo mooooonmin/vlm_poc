@@ -31,7 +31,18 @@ Windows PowerShell:
 ```powershell
 .\scripts\setup_venv.ps1
 .\.venv\Scripts\Activate.ps1
+docker pull vllm/vllm-openai:latest
 python app.py
+```
+
+`docker pull vllm/vllm-openai:latest`는 필수는 아니지만 첫 실행 전에 권장합니다.
+앱의 `vLLM 시작 / GPU 점유` 버튼도 내부적으로 같은 이미지를 자동 다운로드하지만, vLLM Docker 이미지는 수십 GB 크기라 첫 실행에서 오래 대기할 수 있습니다.
+이미지를 미리 받아두면 화면에서 vLLM을 시작할 때 Docker 이미지 다운로드 단계는 건너뛰고 컨테이너 시작과 Qwen 모델 다운로드/로딩 단계로 바로 넘어갈 수 있습니다.
+
+이미지가 이미 받아졌는지 확인하려면 다음 명령을 사용합니다.
+
+```powershell
+docker images vllm/vllm-openai
 ```
 
 기본 접속 주소:
