@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen3-vl-2b
+  labels:
+    app: vllm-qwen3-vl-2b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vllm-qwen3-vl-2b
+  template:
+    metadata:
+      labels:
+        app: vllm-qwen3-vl-2b
+    spec:
+      containers:
+        - name: vllm
+          # vLLM의 OpenAI 호환 API 서버 이미지입니다.
+          # 이 이미지는 모델을 포함하지 않고, 실행 시 --model로 지정한 Hugging Face 모델을 다운로드/로드합니다.
+          image: vllm/vllm-openai:latest
+          args:
+            # 공식 vLLM Docker 문서는 vllm/vllm-openai 이미지에 --model 인자를 사용하는 예시를 제공합니다.
+            # Qwen/Qwen3-VL-2B-Instruct는 영상에서 추출한 프레임 이미지들을 분석할 기본 VLM입니다.
+            - --model
+            - Qwen/Qwen3-VL-2B-Instruct
+            # 컨테이너 내부 서버를 모든 인터페이스에서 받게 합니다.
+            # Kubernetes Service가 Pod로 트래픽을 전달하려면 127.0.0.1이 아니라 0.0.0.0으로 열어야 합니다.
+            - --host
+            - 0.0.0.0
+            # 컨테이너 내부 HTTP 포트입니다. 아래 Service도 이 포트로 연결합니다.
+            - --port
+            - "8000"
+            # vLLM이 사용할 GPU 메모리 비율입니다.
+            # 값이 높을수록 모델/KV cache에 더 많은 메모리를 쓰지만, OOM 위험도 커집니다.
+            - --gpu-memory-utilization
+            - "0.85"
+            # 최대 컨텍스트 길이입니다.
+            # 영상 프레임을 여러 장 넣으면 이미지 토큰과 텍스트 토큰이 함께 늘어나므로,
+            # RTX 4070 Ti급 12GB 환경에서 OOM이 나면 4096으로 낮춰 테스트합니다.
+            - --max-model-len
+            - "8192"
+            # Hugging Face 모델 저장소의 커스텀 모델 코드를 신뢰하고 실행합니다.
+            # Qwen VLM처럼 모델별 처리 코드가 필요한 경우를 위해 켭니다.
+            - --trust-remote-code
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            limits:
+              # Time-slicing 적용 여부는 노드의 NVIDIA device-plugin 설정에 의해 결정됩니다.
+              # 이 요청은 노출된 GPU 슬롯 1개를 사용한다는 의미이며, GPU 메모리 파티션을 보장하지 않습니다.
+              # time-slicing replicas=2 환경에서는 두 Pod가 각각 nvidia.com/gpu: 1을 요청할 수 있지만,
+              # 실제 GPU 메모리는 공유되므로 두 vLLM Pod가 동시에 안정적으로 뜬다는 보장은 없습니다.
+              nvidia.com/gpu: 1
+          volumeMounts:
+            - name: hf-cache
+              # Hugging Face 모델 캐시 위치입니다.
+              # Pod가 재시작될 때마다 모델을 다시 다운로드하지 않으려면 실제 운영에서는 PVC로 바꾸는 것이 좋습니다.
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: hf-cache
+          # PoC 초안에서는 emptyDir를 사용합니다.
+          # emptyDir는 Pod가 삭제되면 캐시도 사라지므로, 운영/반복 테스트 환경에서는 PVC 사용을 권장합니다.
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-qwen3-vl-2b
+  labels:
+    app: vllm-qwen3-vl-2b
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm-qwen3-vl-2b
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
