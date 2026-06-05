@@ -315,7 +315,32 @@ INDEX_HTML = """<!doctype html>
         document.getElementById("runtimeStatus").textContent = data.message || "vLLM 시작 실패";
         return;
       }
-      await refreshRuntime();
+      document.getElementById("runtimeStatus").textContent =
+        "vLLM 컨테이너 시작 완료. 모델 다운로드/로딩 상태를 자동 확인합니다...";
+      await waitForVllmReady();
+    }
+
+    async function waitForVllmReady() {
+      const maxAttempts = 120;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        const [gpu, vllm, timeslicing] = await Promise.all([
+          fetch("/api/gpu-status").then(r => r.json()),
+          fetch("/api/vllm-status").then(r => r.json()),
+          fetch("/api/timeslicing").then(r => r.json())
+        ]);
+        document.getElementById("runtimeDetail").textContent =
+          JSON.stringify({ gpu, vllm, timeslicing }, null, 2);
+        if (vllm.running) {
+          document.getElementById("runtimeStatus").textContent =
+            "vLLM 준비 완료 - Qwen 모델이 GPU 메모리를 점유하고 있습니다. 이제 영상 분석을 실행할 수 있습니다.";
+          return;
+        }
+        document.getElementById("runtimeStatus").textContent =
+          `vLLM 로딩 대기 중 (${attempt}/${maxAttempts}) - 첫 실행은 이미지/모델 다운로드 때문에 오래 걸릴 수 있습니다.`;
+      }
+      document.getElementById("runtimeStatus").textContent =
+        "vLLM 준비 확인 시간이 초과되었습니다. CUDA / vLLM 상세의 Docker logs를 확인하세요.";
     }
 
     async function stopVllm() {

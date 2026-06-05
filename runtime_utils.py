@@ -154,6 +154,7 @@ def get_vllm_status() -> dict[str, Any]:
     docker_result = run_command(
         ["docker", "ps", "-a", "--filter", f"name={DEFAULT_CONTAINER_NAME}", "--format", "{{.Names}}\t{{.Status}}"]
     )
+    logs_result = run_command(["docker", "logs", "--tail", "80", DEFAULT_CONTAINER_NAME], timeout=10)
     endpoint_ok = False
     endpoint_error = ""
     try:
@@ -183,6 +184,7 @@ def get_vllm_status() -> dict[str, Any]:
         "docker_available": docker_version.get("ok", False),
         "docker_version": docker_version,
         "docker": docker_result,
+        "logs": logs_result,
         "endpoint_ok": endpoint_ok,
         "endpoint_error": endpoint_error,
     }
@@ -218,6 +220,21 @@ def start_vllm_container() -> dict[str, Any]:
         }
 
     remove_result = run_command(["docker", "rm", "-f", DEFAULT_CONTAINER_NAME], timeout=20)
+
+    # 첫 실행에서는 vllm/vllm-openai 이미지 다운로드가 오래 걸릴 수 있습니다.
+    # 기존 구현처럼 docker run 전체에 짧은 timeout을 걸면 이미지 pull 중에 실패로 오해할 수 있습니다.
+    # 그래서 pull을 별도 단계로 분리하고, 충분한 시간을 줍니다.
+    pull_result = run_command(["docker", "pull", DEFAULT_VLLM_IMAGE], timeout=1800)
+    if not pull_result.get("ok"):
+        return {
+            "ok": False,
+            "message": (
+                "vLLM Docker 이미지 다운로드에 실패했습니다. "
+                "네트워크 상태와 Docker Desktop 상태를 확인하세요."
+            ),
+            "removed_previous": remove_result,
+            "pulled_image": pull_result,
+        }
 
     # HF_HOME은 Hugging Face 모델 캐시 위치입니다.
     # 컨테이너를 지웠다가 다시 실행해도 모델 파일을 재사용할 수 있게 호스트 폴더를 마운트합니다.
@@ -270,7 +287,9 @@ def start_vllm_container() -> dict[str, Any]:
             "--trust-remote-code",
         ]
     )
-    start_result = run_command(command, timeout=60)
+    # 이미지가 이미 준비된 상태에서 docker run -d는 컨테이너 ID만 출력하고 빠르게 종료되어야 합니다.
+    # 모델 다운로드와 로딩은 컨테이너 내부에서 계속 진행되므로, 이후 /api/vllm-status로 확인합니다.
+    start_result = run_command(command, timeout=120)
     return {
         "ok": start_result.get("ok", False),
         "message": (
@@ -279,6 +298,7 @@ def start_vllm_container() -> dict[str, Any]:
             else "vLLM 컨테이너 시작 명령이 실패했습니다. started.stderr 또는 started.error를 확인하세요."
         ),
         "removed_previous": remove_result,
+        "pulled_image": pull_result,
         "started": start_result,
     }
 
