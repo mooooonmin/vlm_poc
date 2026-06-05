@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>영상 VLM 분석 PoC</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main>
+    <h1>영상 VLM 분석 PoC</h1>
+    <p class="summary">
+      영상 파일 또는 영상 URL을 입력하면 프레임을 균등 추출하고,
+      Qwen VLM을 vLLM OpenAI 호환 API로 호출해 한국어 분석 결과를 받습니다.
+    </p>
+
+    <section>
+      <h2>런타임 상태</h2>
+      <div class="button-row">
+        <button type="button" onclick="refreshRuntime()">상태 새로고침</button>
+        <button type="button" onclick="startVllm()">vLLM 시작 / GPU 점유</button>
+        <button type="button" class="danger" onclick="stopVllm()">vLLM 종료 / GPU 해제</button>
+        <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그 수집</button>
+      </div>
+      <div id="runtimeStatus" class="status">아직 확인하지 않았습니다.</div>
+      <details>
+        <summary>CUDA / vLLM / Time-slicing 상세</summary>
+        <pre id="runtimeDetail"></pre>
+      </details>
+    </section>
+
+    <div class="grid">
+      <section>
+        <h2>영상 입력</h2>
+        <form id="analyzeForm">
+          <div class="field">
+            <label for="videoFile">영상 파일 업로드</label>
+            <input id="videoFile" name="video_file" type="file" accept="video/*" />
+            <div class="hint">파일 업로드와 URL을 둘 다 입력하면 파일 업로드를 우선합니다.</div>
+          </div>
+          <div class="field">
+            <label for="videoUrl">영상 URL</label>
+            <input id="videoUrl" name="video_url" placeholder="https://example.com/sample.mp4" />
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="frameCount">샘플 프레임 수</label>
+              <input id="frameCount" name="frame_count" type="number" min="1" max="12" value="6" />
+            </div>
+            <div class="field">
+              <label for="maxTokens">최대 토큰</label>
+              <input id="maxTokens" name="max_tokens" type="number" min="64" max="2048" value="512" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="modelId">모델 ID</label>
+              <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" />
+            </div>
+            <div class="field">
+              <label for="endpoint">vLLM 엔드포인트</label>
+              <input id="endpoint" name="endpoint" value="http://localhost:8000/v1/chat/completions" />
+            </div>
+          </div>
+          <div class="field">
+            <label for="prompt">분석 프롬프트</label>
+            <textarea id="prompt" name="prompt">이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로 요약해줘.</textarea>
+          </div>
+          <button id="analyzeBtn" type="submit">영상 분석 실행</button>
+          <div id="analyzeStatus" class="status"></div>
+        </form>
+      </section>
+
+      <section>
+        <h2>분석 결과</h2>
+        <div class="field">
+          <label>추출 프레임</label>
+          <div id="frames" class="cards"></div>
+        </div>
+        <div class="field">
+          <label>VLM 응답</label>
+          <pre id="answer">아직 분석하지 않았습니다.</pre>
+        </div>
+        <details>
+          <summary>원본 JSON</summary>
+          <pre id="rawJson"></pre>
+        </details>
+      </section>
+    </div>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

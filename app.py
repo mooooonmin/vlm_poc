@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-영상 입력 VLM 분석 PoC 화면.
+영상 입력 VLM 분석 PoC 서버.
 
-이 앱은 FastAPI 기반의 임시 테스트 화면입니다.
-영상 파일 업로드 또는 영상 URL을 받아 프레임을 균등 추출한 뒤,
-추출 프레임을 vLLM OpenAI 호환 API에 멀티 이미지 입력으로 전달합니다.
+FastAPI는 API 라우팅과 정적 파일 제공만 담당합니다.
+화면 구조, 스타일, 브라우저 로직은 templates/index.html 및 static 파일로 분리했습니다.
 """
 
 from __future__ import annotations
@@ -17,18 +16,15 @@ from typing import Any
 import requests
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from runtime_utils import (
-    DEFAULT_CONTAINER_NAME,
-    DEFAULT_GPU_MEMORY_UTILIZATION,
-    DEFAULT_MAX_MODEL_LEN,
     DEFAULT_MODEL_ID,
     DEFAULT_VLLM_ENDPOINT,
+    collect_timeslicing_logs,
     get_gpu_status,
     get_timeslicing_summary,
-    collect_timeslicing_logs,
     get_vllm_status,
     start_vllm_container,
     stop_vllm_container,
@@ -47,366 +43,14 @@ from video_utils import (
 BASE_DIR = Path(__file__).resolve().parent
 TMP_DIR = BASE_DIR / "tmp"
 FRAME_DIR = TMP_DIR / "frames"
+TEMPLATE_DIR = BASE_DIR / "templates"
+STATIC_DIR = BASE_DIR / "static"
 FRAME_DIR.mkdir(parents=True, exist_ok=True)
 
 
 app = FastAPI(title="Video VLM Analysis PoC")
 app.mount("/frames", StaticFiles(directory=str(FRAME_DIR)), name="frames")
-
-
-INDEX_HTML = """<!doctype html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>영상 VLM 분석 PoC</title>
-  <style>
-    :root {
-      color-scheme: light;
-      font-family: Arial, "Malgun Gothic", sans-serif;
-      background: #f5f7fb;
-      color: #1f2937;
-    }
-    body {
-      margin: 0;
-      padding: 24px;
-    }
-    main {
-      max-width: 1180px;
-      margin: 0 auto;
-    }
-    h1 {
-      margin: 0 0 8px;
-      font-size: 25px;
-    }
-    h2 {
-      margin: 0 0 12px;
-      font-size: 18px;
-    }
-    p {
-      line-height: 1.5;
-    }
-    .summary {
-      margin: 0 0 18px;
-      color: #4b5563;
-    }
-    .grid {
-      display: grid;
-      grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
-      gap: 16px;
-      align-items: start;
-    }
-    section {
-      background: #fff;
-      border: 1px solid #d9e1ec;
-      border-radius: 8px;
-      padding: 16px;
-      margin-bottom: 16px;
-    }
-    label {
-      display: block;
-      margin-bottom: 6px;
-      font-weight: 700;
-    }
-    input, textarea {
-      width: 100%;
-      box-sizing: border-box;
-      border: 1px solid #c8d2df;
-      border-radius: 6px;
-      padding: 10px;
-      font: inherit;
-      background: #fff;
-    }
-    textarea {
-      min-height: 150px;
-      resize: vertical;
-    }
-    button {
-      border: 0;
-      border-radius: 6px;
-      background: #155eef;
-      color: #fff;
-      font-weight: 700;
-      padding: 10px 13px;
-      cursor: pointer;
-    }
-    button.secondary {
-      background: #374151;
-    }
-    button.danger {
-      background: #b42318;
-    }
-    button:disabled {
-      background: #9db5ed;
-      cursor: wait;
-    }
-    .field {
-      margin-bottom: 14px;
-    }
-    .row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
-    }
-    .button-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    .status {
-      min-height: 22px;
-      margin-top: 10px;
-      color: #4b5563;
-    }
-    .cards {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-      gap: 10px;
-    }
-    .frame-card {
-      border: 1px solid #d9e1ec;
-      border-radius: 6px;
-      background: #f9fafb;
-      overflow: hidden;
-    }
-    .frame-card img {
-      width: 100%;
-      height: 96px;
-      object-fit: cover;
-      display: block;
-    }
-    .frame-card div {
-      padding: 7px;
-      font-size: 12px;
-      color: #4b5563;
-    }
-    pre {
-      margin: 0;
-      padding: 12px;
-      border-radius: 6px;
-      background: #111827;
-      color: #e5e7eb;
-      white-space: pre-wrap;
-      word-break: break-word;
-      overflow: auto;
-      min-height: 160px;
-    }
-    details {
-      margin-top: 10px;
-    }
-    .hint {
-      font-size: 13px;
-      color: #6b7280;
-    }
-    @media (max-width: 900px) {
-      body {
-        padding: 14px;
-      }
-      .grid, .row {
-        grid-template-columns: 1fr;
-      }
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>영상 VLM 분석 PoC</h1>
-    <p class="summary">
-      영상 파일 또는 영상 URL을 입력하면 프레임을 균등 추출하고,
-      Qwen VLM을 vLLM OpenAI 호환 API로 호출해 한국어 분석 결과를 받습니다.
-    </p>
-
-    <section>
-      <h2>런타임 상태</h2>
-      <div class="button-row">
-        <button type="button" onclick="refreshRuntime()">상태 새로고침</button>
-        <button type="button" onclick="startVllm()">vLLM 시작 / GPU 점유</button>
-        <button type="button" class="danger" onclick="stopVllm()">vLLM 종료 / GPU 해제</button>
-        <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그 수집</button>
-      </div>
-      <div id="runtimeStatus" class="status">아직 확인하지 않았습니다.</div>
-      <details>
-        <summary>CUDA / vLLM / Time-slicing 상세</summary>
-        <pre id="runtimeDetail"></pre>
-      </details>
-    </section>
-
-    <div class="grid">
-      <section>
-        <h2>영상 입력</h2>
-        <form id="analyzeForm">
-          <div class="field">
-            <label for="videoFile">영상 파일 업로드</label>
-            <input id="videoFile" name="video_file" type="file" accept="video/*" />
-            <div class="hint">파일 업로드와 URL을 둘 다 입력하면 파일 업로드를 우선합니다.</div>
-          </div>
-          <div class="field">
-            <label for="videoUrl">영상 URL</label>
-            <input id="videoUrl" name="video_url" placeholder="https://example.com/sample.mp4" />
-          </div>
-          <div class="row">
-            <div class="field">
-              <label for="frameCount">샘플 프레임 수</label>
-              <input id="frameCount" name="frame_count" type="number" min="1" max="12" value="6" />
-            </div>
-            <div class="field">
-              <label for="maxTokens">최대 토큰</label>
-              <input id="maxTokens" name="max_tokens" type="number" min="64" max="2048" value="512" />
-            </div>
-          </div>
-          <div class="row">
-            <div class="field">
-              <label for="modelId">모델 ID</label>
-              <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" />
-            </div>
-            <div class="field">
-              <label for="endpoint">vLLM 엔드포인트</label>
-              <input id="endpoint" name="endpoint" value="http://localhost:8000/v1/chat/completions" />
-            </div>
-          </div>
-          <div class="field">
-            <label for="prompt">분석 프롬프트</label>
-            <textarea id="prompt" name="prompt">이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로 요약해줘.</textarea>
-          </div>
-          <button id="analyzeBtn" type="submit">영상 분석 실행</button>
-          <div id="analyzeStatus" class="status"></div>
-        </form>
-      </section>
-
-      <section>
-        <h2>분석 결과</h2>
-        <div class="field">
-          <label>추출 프레임</label>
-          <div id="frames" class="cards"></div>
-        </div>
-        <div class="field">
-          <label>VLM 응답</label>
-          <pre id="answer">아직 분석하지 않았습니다.</pre>
-        </div>
-        <details>
-          <summary>원본 JSON</summary>
-          <pre id="rawJson"></pre>
-        </details>
-      </section>
-    </div>
-  </main>
-
-  <script>
-    async function refreshRuntime() {
-      const [gpu, vllm, timeslicing] = await Promise.all([
-        fetch("/api/gpu-status").then(r => r.json()),
-        fetch("/api/vllm-status").then(r => r.json()),
-        fetch("/api/timeslicing").then(r => r.json())
-      ]);
-      const vllmState = vllm.running
-        ? "실행 중 - Qwen 모델이 GPU 메모리를 점유하고 있습니다. 테스트가 끝나면 vLLM 종료 / GPU 해제를 누르세요."
-        : "중지됨 - GPU 모델 서버가 떠 있지 않습니다.";
-      document.getElementById("runtimeStatus").textContent =
-        `GPU: ${gpu.ok ? "확인됨" : "확인 실패"} / vLLM: ${vllmState} ${vllm.message || ""}`;
-      document.getElementById("runtimeDetail").textContent =
-        JSON.stringify({ gpu, vllm, timeslicing }, null, 2);
-    }
-
-    async function startVllm() {
-      document.getElementById("runtimeStatus").textContent =
-        "vLLM 컨테이너 시작 요청 중... 모델이 GPU에 로드되면 VRAM을 계속 점유합니다.";
-      const res = await fetch("/api/start-vllm", { method: "POST" });
-      const data = await res.json();
-      document.getElementById("runtimeDetail").textContent = JSON.stringify(data, null, 2);
-      if (!data.ok) {
-        document.getElementById("runtimeStatus").textContent = data.message || "vLLM 시작 실패";
-        return;
-      }
-      document.getElementById("runtimeStatus").textContent =
-        "vLLM 컨테이너 시작 완료. 모델 다운로드/로딩 상태를 자동 확인합니다...";
-      await waitForVllmReady();
-    }
-
-    async function waitForVllmReady() {
-      const maxAttempts = 120;
-      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        const [gpu, vllm, timeslicing] = await Promise.all([
-          fetch("/api/gpu-status").then(r => r.json()),
-          fetch("/api/vllm-status").then(r => r.json()),
-          fetch("/api/timeslicing").then(r => r.json())
-        ]);
-        document.getElementById("runtimeDetail").textContent =
-          JSON.stringify({ gpu, vllm, timeslicing }, null, 2);
-        if (vllm.running) {
-          document.getElementById("runtimeStatus").textContent =
-            "vLLM 준비 완료 - Qwen 모델이 GPU 메모리를 점유하고 있습니다. 이제 영상 분석을 실행할 수 있습니다.";
-          return;
-        }
-        document.getElementById("runtimeStatus").textContent =
-          `vLLM 로딩 대기 중 (${attempt}/${maxAttempts}) - 첫 실행은 이미지/모델 다운로드 때문에 오래 걸릴 수 있습니다.`;
-      }
-      document.getElementById("runtimeStatus").textContent =
-        "vLLM 준비 확인 시간이 초과되었습니다. CUDA / vLLM 상세의 Docker logs를 확인하세요.";
-    }
-
-    async function stopVllm() {
-      document.getElementById("runtimeStatus").textContent =
-        "vLLM 컨테이너 종료 요청 중... 완료되면 Qwen 모델이 내려가고 GPU 메모리가 반환됩니다.";
-      const res = await fetch("/api/stop-vllm", { method: "POST" });
-      const data = await res.json();
-      document.getElementById("runtimeDetail").textContent = JSON.stringify(data, null, 2);
-      await refreshRuntime();
-    }
-
-    async function collectTimeslicingLogs() {
-      document.getElementById("runtimeStatus").textContent =
-        "time-slicing 관련 Kubernetes/GPU 로그를 수집 중입니다...";
-      const res = await fetch("/api/timeslicing/logs", { method: "POST" });
-      const data = await res.json();
-      document.getElementById("runtimeDetail").textContent = JSON.stringify(data, null, 2);
-      document.getElementById("runtimeStatus").textContent =
-        `time-slicing 로그 수집 완료: ${data.log_dir || "로그 경로 없음"}`;
-    }
-
-    document.getElementById("analyzeForm").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const button = document.getElementById("analyzeBtn");
-      const status = document.getElementById("analyzeStatus");
-      const answer = document.getElementById("answer");
-      const rawJson = document.getElementById("rawJson");
-      const frames = document.getElementById("frames");
-
-      button.disabled = true;
-      status.textContent = "영상 저장, 프레임 추출, vLLM 분석 요청을 진행 중입니다...";
-      answer.textContent = "";
-      rawJson.textContent = "";
-      frames.innerHTML = "";
-
-      try {
-        const formData = new FormData(event.target);
-        const res = await fetch("/api/analyze-video", { method: "POST", body: formData });
-        const data = await res.json();
-        if (!res.ok) {
-          throw new Error(data.detail || data.error || "분석 요청 실패");
-        }
-        status.textContent = `완료: ${data.video_info.sampled_frame_count}개 프레임 분석`;
-        answer.textContent = data.answer || "(응답 텍스트 없음)";
-        rawJson.textContent = JSON.stringify(data, null, 2);
-        frames.innerHTML = data.frames.map(frame => `
-          <div class="frame-card">
-            <img src="${frame.preview_url}" alt="sample frame ${frame.index}" />
-            <div>#${frame.index} / ${frame.timestamp_sec.toFixed(2)}초</div>
-          </div>
-        `).join("");
-      } catch (error) {
-        status.textContent = "오류 발생";
-        answer.textContent = String(error);
-      } finally {
-        button.disabled = false;
-      }
-    });
-
-    refreshRuntime();
-  </script>
-</body>
-</html>
-"""
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def build_vllm_payload(
@@ -446,10 +90,10 @@ def call_vllm(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     return response.json()
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    """임시 테스트 UI를 반환합니다."""
-    return INDEX_HTML
+@app.get("/")
+def index() -> FileResponse:
+    """분리된 HTML 파일을 반환합니다."""
+    return FileResponse(TEMPLATE_DIR / "index.html")
 
 
 @app.get("/api/gpu-status")
