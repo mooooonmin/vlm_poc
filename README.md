@@ -71,12 +71,14 @@ http://127.0.0.1:8080
 
 ## 주요 파일
 
-- `app.py`: FastAPI 서버, vLLM 호출, 영상 분석 job worker, API 라우트.
-- `job_store.py`: `job_id` 기반 분석 상태 저장과 `tmp/jobs/{job_id}/job.json` 기록.
-- `video_utils.py`: 영상 업로드 저장, YouTube/URL 다운로드, OpenCV 프레임 샘플링, base64 이미지 변환.
-- `runtime_utils.py`: CUDA 상태 확인, Docker 기반 vLLM 시작/종료/로그 확인, time-slicing 검증 로그 수집.
-- `templates/index.html`, `static/app.js`, `static/style.css`: 테스트용 웹 화면.
-- `k8s/`: 추후 Linux/Kubernetes GPU 노드에서 검증할 time-slicing 및 vLLM 배포 manifest 초안.
+| 파일/폴더 | 역할 |
+| --- | --- |
+| `app.py` | FastAPI 서버, vLLM 호출, 영상 분석 job worker, API 라우트 |
+| `job_store.py` | `job_id` 기반 분석 상태 저장과 `tmp/jobs/{job_id}/job.json` 기록 |
+| `video_utils.py` | 영상 업로드 저장, YouTube/URL 다운로드, OpenCV 프레임 샘플링, base64 이미지 변환 |
+| `runtime_utils.py` | CUDA 상태 확인, Docker 기반 vLLM 시작/종료/로그 확인, time-slicing 검증 로그 수집 |
+| `templates/index.html`, `static/app.js`, `static/style.css` | 테스트용 웹 화면 |
+| `k8s/` | 추후 Linux/Kubernetes GPU 노드에서 검증할 time-slicing 및 vLLM 배포 manifest 초안 |
 
 ## 분석 처리 방식
 
@@ -87,15 +89,17 @@ http://127.0.0.1:8080
 
 ## 기본 설정
 
-- 모델: `Qwen/Qwen3-VL-2B-Instruct`
-- vLLM 포트: `8000`
-- FastAPI 화면 포트: `8080`
-- 샘플 프레임 수: 기본 `6`, 최대 `12`
-- `GPU_MEMORY_UTILIZATION`: `0.85`
-- `MAX_MODEL_LEN`: `8192`
-- 업로드 파일 제한: 기본 `1GB`
-- 영상 길이 제한: 기본 `1800초`
-- 컨테이너 이름: `vlm-vllm-qwen`
+| 항목 | 기본값 |
+| --- | --- |
+| 모델 | `Qwen/Qwen3-VL-2B-Instruct` |
+| vLLM 포트 | `8000` |
+| FastAPI 화면 포트 | `8080` |
+| 샘플 프레임 수 | 기본 `6`, 최대 `12` |
+| `GPU_MEMORY_UTILIZATION` | `0.85` |
+| `MAX_MODEL_LEN` | `8192` |
+| 업로드 파일 제한 | 기본 `1GB` |
+| 영상 길이 제한 | 기본 `1800초` |
+| 컨테이너 이름 | `vlm-vllm-qwen` |
 
 RTX 4070 Ti에서 OOM이 발생하면 샘플 프레임 수를 `4`로 낮추고, 환경 변수 `MAX_MODEL_LEN=4096`으로 낮춰 다시 테스트합니다.
 
