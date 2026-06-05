@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,20 @@ DEFAULT_GPU_MEMORY_UTILIZATION = os.environ.get("GPU_MEMORY_UTILIZATION", "0.85"
 # 모델이 한 번에 처리할 수 있는 최대 컨텍스트 길이입니다.
 # 값이 커질수록 KV cache 메모리 사용량이 늘 수 있으므로 OOM 발생 시 4096으로 낮춰 테스트합니다.
 DEFAULT_MAX_MODEL_LEN = os.environ.get("MAX_MODEL_LEN", "8192")
+
+
+# vLLM 시작 작업 상태입니다.
+# Docker image pull과 모델 컨테이너 시작은 오래 걸릴 수 있으므로 HTTP 요청 안에서 끝까지 기다리지 않습니다.
+# 대신 백그라운드 thread가 작업하고, 화면은 /api/vllm-status polling으로 이 상태를 확인합니다.
+VLLM_START_JOB: dict[str, Any] = {
+    "running": False,
+    "stage": "idle",
+    "message": "vLLM 시작 작업이 아직 실행되지 않았습니다.",
+    "started_at": None,
+    "finished_at": None,
+    "result": None,
+}
+VLLM_START_LOCK = threading.Lock()
 
 
 def run_command(command: list[str], timeout: int = 30) -> dict[str, Any]:
@@ -210,9 +225,16 @@ def get_vllm_status() -> dict[str, Any]:
         "docker_version": docker_version,
         "docker": docker_result,
         "logs": logs_result,
+        "start_job": get_vllm_start_job(),
         "endpoint_ok": endpoint_ok,
         "endpoint_error": endpoint_error,
     }
+
+
+def get_vllm_start_job() -> dict[str, Any]:
+    """현재 vLLM 시작 백그라운드 작업 상태를 복사해서 반환합니다."""
+    with VLLM_START_LOCK:
+        return dict(VLLM_START_JOB)
 
 
 def start_vllm_container() -> dict[str, Any]:
@@ -233,6 +255,14 @@ def start_vllm_container() -> dict[str, Any]:
     이 함수는 모델 분석 요청을 보내지 않습니다.
     컨테이너 시작 후 `/api/vllm-status` 또는 `/v1/models`로 로딩 완료 여부를 확인해야 합니다.
     """
+    with VLLM_START_LOCK:
+        if VLLM_START_JOB["running"]:
+            return {
+                "ok": True,
+                "message": "vLLM 시작 작업이 이미 백그라운드에서 진행 중입니다.",
+                "start_job": dict(VLLM_START_JOB),
+            }
+
     docker_version = run_command(["docker", "version"], timeout=10)
     if not docker_version.get("ok"):
         return {
@@ -244,11 +274,66 @@ def start_vllm_container() -> dict[str, Any]:
             "docker_version": docker_version,
         }
 
+    with VLLM_START_LOCK:
+        VLLM_START_JOB.update(
+            {
+                "running": True,
+                "stage": "starting",
+                "message": "vLLM 시작 백그라운드 작업을 준비 중입니다.",
+                "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "finished_at": None,
+                "result": None,
+            }
+        )
+
+    thread = threading.Thread(target=_start_vllm_container_worker, daemon=True)
+    thread.start()
+    return {
+        "ok": True,
+        "message": (
+            "vLLM 시작 작업을 백그라운드로 보냈습니다. "
+            "이미지 다운로드와 모델 로딩은 오래 걸릴 수 있으며 화면에서 자동으로 상태를 확인합니다."
+        ),
+        "start_job": get_vllm_start_job(),
+    }
+
+
+def _start_vllm_container_worker() -> None:
+    """
+    vLLM Docker 이미지 pull과 컨테이너 시작을 백그라운드에서 수행합니다.
+
+    이 함수는 HTTP 요청 thread를 막지 않기 위해 별도 thread에서 실행됩니다.
+    단계별 진행 상태는 VLLM_START_JOB에 저장되어 화면에서 확인할 수 있습니다.
+    """
+    result = _start_vllm_container_blocking()
+    with VLLM_START_LOCK:
+        VLLM_START_JOB.update(
+            {
+                "running": False,
+                "stage": "done" if result.get("ok") else "failed",
+                "message": result.get("message", ""),
+                "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "result": result,
+            }
+        )
+
+
+def _set_vllm_start_stage(stage: str, message: str) -> None:
+    """백그라운드 시작 작업의 현재 단계를 갱신합니다."""
+    with VLLM_START_LOCK:
+        VLLM_START_JOB["stage"] = stage
+        VLLM_START_JOB["message"] = message
+
+
+def _start_vllm_container_blocking() -> dict[str, Any]:
+    """실제 vLLM Docker 이미지 pull과 컨테이너 시작을 순서대로 수행합니다."""
+    _set_vllm_start_stage("remove_previous", "이전 vLLM 컨테이너를 정리하는 중입니다.")
     remove_result = run_command(["docker", "rm", "-f", DEFAULT_CONTAINER_NAME], timeout=20)
 
     # 첫 실행에서는 vllm/vllm-openai 이미지 다운로드가 오래 걸릴 수 있습니다.
     # 기존 구현처럼 docker run 전체에 짧은 timeout을 걸면 이미지 pull 중에 실패로 오해할 수 있습니다.
     # 그래서 pull을 별도 단계로 분리하고, 충분한 시간을 줍니다.
+    _set_vllm_start_stage("pull_image", "vLLM Docker 이미지를 다운로드하는 중입니다. 첫 실행은 오래 걸릴 수 있습니다.")
     pull_result = run_command(["docker", "pull", DEFAULT_VLLM_IMAGE], timeout=1800)
     if not pull_result.get("ok"):
         return {
@@ -314,6 +399,7 @@ def start_vllm_container() -> dict[str, Any]:
     )
     # 이미지가 이미 준비된 상태에서 docker run -d는 컨테이너 ID만 출력하고 빠르게 종료되어야 합니다.
     # 모델 다운로드와 로딩은 컨테이너 내부에서 계속 진행되므로, 이후 /api/vllm-status로 확인합니다.
+    _set_vllm_start_stage("run_container", "vLLM 컨테이너를 시작하는 중입니다.")
     start_result = run_command(command, timeout=120)
     return {
         "ok": start_result.get("ok", False),
@@ -336,6 +422,15 @@ def stop_vllm_container() -> dict[str, Any]:
     그래서 PoC에서는 `docker rm -f`로 중지와 제거를 한 번에 처리합니다.
     모델 캐시는 호스트 `HF_HOME`에 남아 있으므로 컨테이너를 지워도 모델 다운로드 파일은 보존됩니다.
     """
+    with VLLM_START_LOCK:
+        VLLM_START_JOB.update(
+            {
+                "running": False,
+                "stage": "stopped",
+                "message": "사용자 요청으로 vLLM 컨테이너를 중지했습니다.",
+                "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        )
     return run_command(["docker", "rm", "-f", DEFAULT_CONTAINER_NAME], timeout=30)
 
 
