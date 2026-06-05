@@ -28,6 +28,7 @@ from runtime_utils import (
     DEFAULT_VLLM_ENDPOINT,
     get_gpu_status,
     get_timeslicing_summary,
+    collect_timeslicing_logs,
     get_vllm_status,
     start_vllm_container,
     stop_vllm_container,
@@ -221,6 +222,7 @@ INDEX_HTML = """<!doctype html>
         <button type="button" onclick="refreshRuntime()">상태 새로고침</button>
         <button type="button" onclick="startVllm()">vLLM 시작 / GPU 점유</button>
         <button type="button" class="danger" onclick="stopVllm()">vLLM 종료 / GPU 해제</button>
+        <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그 수집</button>
       </div>
       <div id="runtimeStatus" class="status">아직 확인하지 않았습니다.</div>
       <details>
@@ -352,6 +354,16 @@ INDEX_HTML = """<!doctype html>
       await refreshRuntime();
     }
 
+    async function collectTimeslicingLogs() {
+      document.getElementById("runtimeStatus").textContent =
+        "time-slicing 관련 Kubernetes/GPU 로그를 수집 중입니다...";
+      const res = await fetch("/api/timeslicing/logs", { method: "POST" });
+      const data = await res.json();
+      document.getElementById("runtimeDetail").textContent = JSON.stringify(data, null, 2);
+      document.getElementById("runtimeStatus").textContent =
+        `time-slicing 로그 수집 완료: ${data.log_dir || "로그 경로 없음"}`;
+    }
+
     document.getElementById("analyzeForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const button = document.getElementById("analyzeBtn");
@@ -471,6 +483,17 @@ def api_timeslicing() -> dict[str, Any]:
     이 API는 향후 Kubernetes GPU 노드에서 적용할 설정 파일 위치와 주의사항을 화면에 보여주기 위한 용도입니다.
     """
     return get_timeslicing_summary(BASE_DIR)
+
+
+@app.post("/api/timeslicing/logs")
+def api_collect_timeslicing_logs() -> dict[str, Any]:
+    """
+    Kubernetes time-slicing 검증에 필요한 로그를 파일로 수집합니다.
+
+    이 API는 실제 time-slicing을 적용하지 않습니다.
+    현재 환경에서 kubectl, NVIDIA device-plugin, node GPU 리소스가 어떤 상태인지 증거 파일을 남깁니다.
+    """
+    return collect_timeslicing_logs(BASE_DIR)
 
 
 @app.post("/api/start-vllm")

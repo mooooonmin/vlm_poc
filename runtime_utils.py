@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,30 @@ def run_command(command: list[str], timeout: int = 30) -> dict[str, Any]:
         return {"ok": False, "error": str(error), "command": command}
     except subprocess.TimeoutExpired as error:
         return {"ok": False, "error": f"명령 시간이 초과되었습니다: {error}", "command": command}
+
+
+def write_text_log(path: Path, title: str, result: dict[str, Any]) -> None:
+    """
+    명령 실행 결과를 사람이 읽기 쉬운 텍스트 로그로 저장합니다.
+
+    time-slicing 검증은 Kubernetes 클러스터/노드 상태와 강하게 연결됩니다.
+    실행 환경마다 실패 원인이 다르므로, 성공/실패 여부와 stdout/stderr를 그대로 파일에 남깁니다.
+    """
+    lines = [
+        f"# {title}",
+        "",
+        f"command: {' '.join(str(part) for part in result.get('command', []))}",
+        f"ok: {result.get('ok')}",
+        f"returncode: {result.get('returncode', '')}",
+        "",
+        "## stdout",
+        result.get("stdout", "") or "(empty)",
+        "",
+        "## stderr",
+        result.get("stderr", "") or result.get("error", "") or "(empty)",
+        "",
+    ]
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def get_gpu_status() -> dict[str, Any]:
@@ -334,5 +359,73 @@ def get_timeslicing_summary(project_root: Path) -> dict[str, Any]:
         "note": (
             "time-slicing은 GPU 접근 슬롯을 초과 할당하지만 GPU 메모리를 물리적으로 나누지 않습니다. "
             "실제 적용은 Linux/Kubernetes GPU 노드에서 검증해야 합니다."
+        ),
+    }
+
+
+def collect_timeslicing_logs(project_root: Path) -> dict[str, Any]:
+    """
+    time-slicing 검증에 필요한 Kubernetes/GPU 관련 로그를 수집합니다.
+
+    수집하는 항목:
+    - kubectl version: kubectl과 클러스터 연결 가능 여부 확인
+    - kubectl config current-context: 현재 어느 클러스터를 보고 있는지 확인
+    - kube-system Pod 목록: NVIDIA device-plugin Pod 존재 여부 확인
+    - NVIDIA device-plugin 로그: time-slicing 설정 로드 오류나 GPU 리소스 노출 오류 확인
+    - node describe: nvidia.com/gpu 리소스가 몇 개로 노출되는지 확인
+    - app Pod 목록: vLLM Pod 스케줄링 상태 확인
+    - 로컬 nvidia-smi: 현재 장비 GPU 상태 참고용
+
+    로컬 Windows + Docker Desktop만 있는 환경에서는 Kubernetes GPU 노드가 없을 수 있습니다.
+    그 경우에도 실패 결과를 logs/timeslicing/... 파일로 남겨 "아직 K8s 환경이 아니다"는 근거를 남깁니다.
+    """
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    log_dir = project_root / "logs" / "timeslicing" / timestamp
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    commands: list[tuple[str, list[str], int]] = [
+        ("kubectl-version", ["kubectl", "version", "--client=false"], 20),
+        ("kubectl-context", ["kubectl", "config", "current-context"], 10),
+        ("kube-system-pods", ["kubectl", "get", "pods", "-n", "kube-system", "-o", "wide"], 20),
+        (
+            "nvidia-device-plugin-logs",
+            ["kubectl", "-n", "kube-system", "logs", "-l", "app=nvidia-device-plugin-daemonset", "--tail", "200"],
+            30,
+        ),
+        ("nodes", ["kubectl", "get", "nodes", "-o", "wide"], 20),
+        ("node-describe", ["kubectl", "describe", "nodes"], 30),
+        ("all-pods", ["kubectl", "get", "pods", "-A", "-o", "wide"], 20),
+        (
+            "local-nvidia-smi",
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,utilization.gpu,driver_version", "--format=csv"],
+            10,
+        ),
+    ]
+
+    collected = []
+    for name, command, timeout in commands:
+        result = run_command(command, timeout=timeout)
+        log_path = log_dir / f"{name}.txt"
+        write_text_log(log_path, name, result)
+        collected.append(
+            {
+                "name": name,
+                "ok": result.get("ok", False),
+                "path": str(log_path),
+                "summary": (result.get("stdout") or result.get("stderr") or result.get("error") or "")[:500],
+            }
+        )
+
+    manifest = project_root / "k8s" / "nvidia-device-plugin-timeslicing-config.yaml"
+    if manifest.exists():
+        manifest_copy = log_dir / "nvidia-device-plugin-timeslicing-config.yaml"
+        manifest_copy.write_text(manifest.read_text(encoding="utf-8"), encoding="utf-8")
+
+    return {
+        "ok": any(item["ok"] for item in collected),
+        "log_dir": str(log_dir),
+        "items": collected,
+        "note": (
+            "일부 항목이 실패해도 정상입니다. 로컬에 Kubernetes GPU 노드가 없으면 kubectl 관련 로그는 실패 원인으로 저장됩니다."
         ),
     }
