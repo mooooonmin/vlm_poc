@@ -55,17 +55,19 @@ http://127.0.0.1:8080
 
 ## Python API
 
-- `GET /api/gpu-status`: `nvidia-smi` 기반 GPU/CUDA 상태 확인.
-- `GET /api/vllm-status`: Docker 컨테이너와 `http://localhost:8000/v1/models` 기준 vLLM 상태 확인.
-- `GET /api/vllm/logs`: vLLM 컨테이너 로그 tail 조회.
-- `POST /api/start-vllm`: Python에서 Docker 기반 vLLM 컨테이너 시작.
-- `POST /api/stop-vllm`: vLLM 컨테이너 종료 및 GPU 점유 해제.
-- `POST /api/jobs/video`: 영상 분석 job 생성. 즉시 `job_id`를 반환합니다.
-- `GET /api/jobs/{job_id}`: 분석 상태, 추출 프레임, 결과, 에러 조회.
-- `GET /api/jobs`: 최근 분석 job 목록 조회.
-- `POST /api/analyze-video`: 기존 호환용 API. 내부적으로 job을 생성하고 `job_id`를 반환합니다.
-- `GET /api/timeslicing`: K8s time-slicing 초안과 주의사항 확인.
-- `POST /api/timeslicing/logs`: K8s/time-slicing 검증용 명령 결과를 `logs/timeslicing/...`에 저장.
+| Method | Endpoint | 용도 |
+| --- | --- | --- |
+| `GET` | `/api/gpu-status` | `nvidia-smi` 기반 GPU/CUDA 상태 확인 |
+| `GET` | `/api/vllm-status` | Docker 컨테이너와 `http://localhost:8000/v1/models` 기준 vLLM 상태 확인 |
+| `GET` | `/api/vllm/logs` | vLLM 컨테이너 로그 tail 조회 |
+| `POST` | `/api/start-vllm` | Python에서 Docker 기반 vLLM 컨테이너 시작 |
+| `POST` | `/api/stop-vllm` | vLLM 컨테이너 종료 및 GPU 점유 해제 |
+| `POST` | `/api/jobs/video` | 영상 분석 job 생성. 즉시 `job_id` 반환 |
+| `GET` | `/api/jobs/{job_id}` | 분석 상태, 추출 프레임, 결과, 에러 조회 |
+| `GET` | `/api/jobs` | 최근 분석 job 목록 조회 |
+| `POST` | `/api/analyze-video` | 기존 호환용 API. 내부적으로 job을 생성하고 `job_id` 반환 |
+| `GET` | `/api/timeslicing` | K8s time-slicing 초안과 주의사항 확인 |
+| `POST` | `/api/timeslicing/logs` | K8s/time-slicing 검증용 명령 결과를 `logs/timeslicing/...`에 저장 |
 
 ## 주요 파일
 
