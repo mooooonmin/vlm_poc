@@ -88,8 +88,42 @@ async function collectTimeslicingLogs() {
   $("runtimeStatus").textContent = "time-slicing 관련 Kubernetes/GPU 로그를 수집 중입니다.";
   const data = await fetchJson("/api/timeslicing/logs", { method: "POST" });
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
+  renderTimeslicingResult(data);
   $("runtimeStatus").textContent =
-    `time-slicing 로그 수집 완료: ${data.log_dir || "로그 경로 없음"}. 로컬 Windows에서는 실제 적용이 아니라 검증 근거 수집입니다.`;
+    `time-slicing 로그 수집 완료: ${data.overall_status || "상태 없음"} / ${data.log_dir || "로그 경로 없음"}`;
+}
+
+function renderTimeslicingResult(data) {
+  const checks = data.checks || [];
+  $("timeslicingResult").innerHTML = `
+    <div class="check-header">
+      <strong>Time-slicing 검증 결과: ${escapeHtml(data.overall_status || "unknown")}</strong>
+      <span>run_id: ${escapeHtml(data.run_id || "-")}</span>
+    </div>
+    <div class="hint">summary.md: ${escapeHtml(data.summary_md_path || "-")}</div>
+    <div class="check-table-wrap">
+      <table class="check-table">
+        <thead>
+          <tr>
+            <th>상태</th>
+            <th>항목</th>
+            <th>원인</th>
+            <th>요약</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${checks.map((check) => `
+            <tr>
+              <td><span class="check-status ${escapeHtml(check.status || "unknown")}">${escapeHtml(check.status || "-")}</span></td>
+              <td>${escapeHtml(check.label || check.id || "-")}</td>
+              <td><code>${escapeHtml(check.reason_code || "-")}</code></td>
+              <td>${escapeHtml(check.summary || "-")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 async function submitAnalysis(event) {

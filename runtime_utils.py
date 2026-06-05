@@ -24,10 +24,12 @@ CUDA, vLLM Docker 컨테이너, time-slicing 안내 유틸리티.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -510,7 +512,7 @@ def get_timeslicing_summary(project_root: Path) -> dict[str, Any]:
     }
 
 
-def collect_timeslicing_logs(project_root: Path) -> dict[str, Any]:
+def _collect_timeslicing_logs_legacy(project_root: Path) -> dict[str, Any]:
     """
     time-slicing 검증에 필요한 Kubernetes/GPU 관련 로그를 수집합니다.
 
@@ -576,3 +578,351 @@ def collect_timeslicing_logs(project_root: Path) -> dict[str, Any]:
             "일부 항목이 실패해도 정상입니다. 로컬에 Kubernetes GPU 노드가 없으면 kubectl 관련 로그는 실패 원인으로 저장됩니다."
         ),
     }
+
+
+def collect_timeslicing_logs(project_root: Path) -> dict[str, Any]:
+    """
+    time-slicing 검증 로그를 1회 실행 단위 리포트로 수집합니다.
+
+    로컬 Windows/Docker 환경에서는 Kubernetes time-slicing이 실제로 적용되지 않을 수 있습니다.
+    이 함수의 목적은 성공만 기록하는 것이 아니라, 왜 검증이 불가능했는지까지 summary.json/summary.md에 남기는 것입니다.
+    """
+    created_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    run_id = f"{timestamp}_{uuid.uuid4().hex[:6]}"
+    log_dir = project_root / "logs" / "timeslicing" / run_id
+    raw_dir = log_dir / "raw"
+    manifest_dir = log_dir / "manifest"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest = project_root / "k8s" / "nvidia-device-plugin-timeslicing-config.yaml"
+    deployment = project_root / "k8s" / "vllm-qwen3-vl-2b-deployment.yaml"
+
+    checks: list[dict[str, Any]] = []
+    checks.append(
+        _run_timeslicing_check(
+            raw_dir,
+            "kubectl_available",
+            "kubectl 사용 가능 여부",
+            ["kubectl", "version", "--client=true"],
+            10,
+            "kubectl 명령이 실행되었습니다.",
+            "kubectl이 없거나 실행할 수 없습니다.",
+        )
+    )
+    checks.append(
+        _classify_cluster_check(
+            _run_timeslicing_check(
+                raw_dir,
+                "cluster_connected",
+                "Kubernetes 클러스터 연결",
+                ["kubectl", "version", "--client=false"],
+                20,
+                "Kubernetes API 서버에 연결되었습니다.",
+                "Kubernetes API 서버에 연결할 수 없습니다.",
+            )
+        )
+    )
+    checks.append(
+        _run_timeslicing_check(
+            raw_dir,
+            "kubectl_context",
+            "현재 kubectl context",
+            ["kubectl", "config", "current-context"],
+            10,
+            "현재 kubectl context를 확인했습니다.",
+            "현재 kubectl context를 확인하지 못했습니다.",
+        )
+    )
+    checks.append(_check_manifest_files(raw_dir, manifest_dir, manifest, deployment))
+    checks.append(
+        _classify_manifest_dry_run(
+            _run_timeslicing_check(
+                raw_dir,
+                "manifest_dry_run",
+                "time-slicing manifest dry-run",
+                ["kubectl", "apply", "--dry-run=client", "--validate=false", "-f", str(manifest)],
+                20,
+                "time-slicing manifest가 client dry-run 명령까지 도달했습니다.",
+                "time-slicing manifest dry-run을 완료하지 못했습니다.",
+            ),
+            manifest.exists(),
+        )
+    )
+    checks.append(
+        _run_timeslicing_check(
+            raw_dir,
+            "kube_system_pods",
+            "kube-system Pod 목록",
+            ["kubectl", "get", "pods", "-n", "kube-system", "-o", "wide"],
+            20,
+            "kube-system Pod 목록을 수집했습니다.",
+            "kube-system Pod 목록을 수집하지 못했습니다.",
+        )
+    )
+    checks.append(
+        _classify_device_plugin_check(
+            _run_timeslicing_check(
+                raw_dir,
+                "device_plugin_found",
+                "NVIDIA device-plugin 확인",
+                ["kubectl", "-n", "kube-system", "logs", "-l", "app=nvidia-device-plugin-daemonset", "--tail", "200"],
+                30,
+                "NVIDIA device-plugin 로그를 수집했습니다.",
+                "NVIDIA device-plugin 로그를 수집하지 못했습니다.",
+            )
+        )
+    )
+    checks.append(
+        _run_timeslicing_check(
+            raw_dir,
+            "nodes",
+            "Kubernetes node 목록",
+            ["kubectl", "get", "nodes", "-o", "wide"],
+            20,
+            "Kubernetes node 목록을 수집했습니다.",
+            "Kubernetes node 목록을 수집하지 못했습니다.",
+        )
+    )
+    checks.append(
+        _classify_gpu_resource_check(
+            _run_timeslicing_check(
+                raw_dir,
+                "gpu_resource_visible",
+                "node GPU 리소스 노출 확인",
+                ["kubectl", "describe", "nodes"],
+                30,
+                "node describe 결과를 수집했습니다.",
+                "node describe 결과를 수집하지 못했습니다.",
+            )
+        )
+    )
+    checks.append(
+        _run_timeslicing_check(
+            raw_dir,
+            "all_pods",
+            "전체 Pod 목록",
+            ["kubectl", "get", "pods", "-A", "-o", "wide"],
+            20,
+            "전체 Pod 목록을 수집했습니다.",
+            "전체 Pod 목록을 수집하지 못했습니다.",
+        )
+    )
+    checks.append(
+        _run_timeslicing_check(
+            raw_dir,
+            "local_nvidia_smi",
+            "로컬 GPU 상태",
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,utilization.gpu,driver_version", "--format=csv"],
+            10,
+            "로컬 nvidia-smi 결과를 수집했습니다.",
+            "로컬 nvidia-smi 결과를 수집하지 못했습니다.",
+        )
+    )
+
+    overall_status = _calculate_timeslicing_overall_status(checks)
+    summary_json_path = log_dir / "summary.json"
+    summary_md_path = log_dir / "summary.md"
+    report = {
+        "ok": overall_status in {"success", "partial", "not_available"},
+        "overall_status": overall_status,
+        "run_id": run_id,
+        "created_at": created_at,
+        "log_dir": str(log_dir),
+        "summary_json_path": str(summary_json_path),
+        "summary_md_path": str(summary_md_path),
+        "raw_log_dir": str(raw_dir),
+        "checks": checks,
+        "items": [
+            {
+                "name": check["id"],
+                "ok": check["status"] == "success",
+                "path": check["raw_log_path"],
+                "summary": check["summary"],
+            }
+            for check in checks
+        ],
+        "paths": {
+            "log_dir": str(log_dir),
+            "raw_log_dir": str(raw_dir),
+            "manifest_dir": str(manifest_dir),
+            "summary_json": str(summary_json_path),
+            "summary_md": str(summary_md_path),
+        },
+        "environment_note": (
+            "로컬 Windows/Docker 환경에서는 Kubernetes GPU 노드가 없을 수 있습니다. "
+            "이 경우 not_available 또는 partial 결과도 유효한 검증 근거입니다."
+        ),
+    }
+    summary_json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    summary_md_path.write_text(_render_timeslicing_summary_markdown(report), encoding="utf-8")
+    return report
+
+
+def _run_timeslicing_check(
+    raw_dir: Path,
+    check_id: str,
+    label: str,
+    command: list[str],
+    timeout: int,
+    success_summary: str,
+    failure_summary: str,
+) -> dict[str, Any]:
+    """명령 하나를 실행하고 check 결과와 raw 로그 파일을 생성합니다."""
+    result = run_command(command, timeout=timeout)
+    raw_log_path = raw_dir / f"{check_id}.txt"
+    write_text_log(raw_log_path, label, result)
+    status = "success" if result.get("ok") else "failed"
+    reason_code = "ok" if result.get("ok") else _infer_reason_code(result)
+    output = result.get("stdout") or result.get("stderr") or result.get("error") or ""
+    return {
+        "id": check_id,
+        "label": label,
+        "status": status,
+        "reason_code": reason_code,
+        "summary": success_summary if result.get("ok") else f"{failure_summary} {output[:300]}".strip(),
+        "command": command,
+        "raw_log_path": str(raw_log_path),
+    }
+
+
+def _check_manifest_files(raw_dir: Path, manifest_dir: Path, manifest: Path, deployment: Path) -> dict[str, Any]:
+    """time-slicing/vLLM manifest 파일 존재 여부와 복사본을 기록합니다."""
+    raw_log_path = raw_dir / "manifest_files.txt"
+    existing = []
+    missing = []
+    for path in [manifest, deployment]:
+        if path.exists():
+            target = manifest_dir / path.name
+            target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            existing.append(str(path))
+        else:
+            missing.append(str(path))
+    raw_log_path.write_text(
+        "existing:\n" + "\n".join(existing or ["(empty)"]) + "\n\nmissing:\n" + "\n".join(missing or ["(empty)"]),
+        encoding="utf-8",
+    )
+    if missing:
+        return {
+            "id": "manifest_files",
+            "label": "manifest 파일 존재 여부",
+            "status": "failed",
+            "reason_code": "manifest_missing",
+            "summary": "필수 manifest 파일 일부가 없습니다.",
+            "command": [],
+            "raw_log_path": str(raw_log_path),
+        }
+    return {
+        "id": "manifest_files",
+        "label": "manifest 파일 존재 여부",
+        "status": "success",
+        "reason_code": "ok",
+        "summary": "time-slicing 및 vLLM manifest 파일을 확인하고 복사했습니다.",
+        "command": [],
+        "raw_log_path": str(raw_log_path),
+    }
+
+
+def _infer_reason_code(result: dict[str, Any]) -> str:
+    """명령 실패 결과에서 대표 reason_code를 추론합니다."""
+    text = f"{result.get('stdout', '')}\n{result.get('stderr', '')}\n{result.get('error', '')}".lower()
+    command = " ".join(result.get("command", [])).lower()
+    if "kubectl" in command and ("not recognized" in text or "file not found" in text or "no such file" in text):
+        return "kubectl_not_installed"
+    if "couldn't get current server api group list" in text or "the server could not find the requested resource" in text:
+        return "cluster_not_connected"
+    if "connection refused" in text or "unable to connect" in text or "no configuration has been provided" in text:
+        return "cluster_not_connected"
+    if "no resources found" in text and "nvidia" in text:
+        return "device_plugin_missing"
+    if "describe" in command and "nvidia.com/gpu" not in text:
+        return "gpu_resource_not_visible"
+    return "unknown"
+
+
+def _classify_cluster_check(check: dict[str, Any]) -> dict[str, Any]:
+    """클러스터 연결 실패를 not_available로 분류합니다."""
+    if check["status"] != "success" and check["reason_code"] == "cluster_not_connected":
+        check["status"] = "not_available"
+        check["summary"] = "Kubernetes 클러스터에 연결되지 않았습니다. 로컬 Windows PoC에서는 정상적인 미검증 상태일 수 있습니다."
+    return check
+
+
+def _classify_manifest_dry_run(check: dict[str, Any], manifest_exists: bool) -> dict[str, Any]:
+    """manifest dry-run 실패 원인을 manifest 부재 또는 클러스터 미연결로 분류합니다."""
+    if not manifest_exists:
+        check["status"] = "failed"
+        check["reason_code"] = "manifest_missing"
+        check["summary"] = "time-slicing manifest 파일이 없어 dry-run을 수행할 수 없습니다."
+    elif check["status"] != "success" and check["reason_code"] == "cluster_not_connected":
+        check["status"] = "not_available"
+        check["summary"] = "kubectl dry-run이 클러스터 discovery 단계에서 실패했습니다. 연결된 K8s API 서버가 필요합니다."
+    return check
+
+
+def _classify_device_plugin_check(check: dict[str, Any]) -> dict[str, Any]:
+    """NVIDIA device-plugin 로그 수집 결과를 분류합니다."""
+    if check["status"] == "success":
+        return check
+    if check["reason_code"] == "cluster_not_connected":
+        check["status"] = "not_available"
+        check["summary"] = "클러스터에 연결되지 않아 NVIDIA device-plugin을 확인할 수 없습니다."
+    else:
+        check["reason_code"] = "device_plugin_missing"
+        check["summary"] = "NVIDIA device-plugin 로그를 찾지 못했습니다. device-plugin 설치 또는 label을 확인해야 합니다."
+    return check
+
+
+def _classify_gpu_resource_check(check: dict[str, Any]) -> dict[str, Any]:
+    """node describe 출력에서 nvidia.com/gpu 노출 여부를 확인합니다."""
+    raw_path = Path(check["raw_log_path"])
+    text = raw_path.read_text(encoding="utf-8", errors="replace").lower() if raw_path.exists() else ""
+    if check["status"] == "success" and "nvidia.com/gpu" in text:
+        check["summary"] = "node describe 결과에서 nvidia.com/gpu 리소스를 확인했습니다."
+        return check
+    if check["reason_code"] == "cluster_not_connected":
+        check["status"] = "not_available"
+        check["summary"] = "클러스터에 연결되지 않아 GPU 리소스 노출 여부를 확인할 수 없습니다."
+    else:
+        check["status"] = "failed"
+        check["reason_code"] = "gpu_resource_not_visible"
+        check["summary"] = "node describe 결과에서 nvidia.com/gpu 리소스를 확인하지 못했습니다."
+    return check
+
+
+def _calculate_timeslicing_overall_status(checks: list[dict[str, Any]]) -> str:
+    """핵심 check 상태를 기준으로 전체 결과를 계산합니다."""
+    core_ids = {"kubectl_available", "cluster_connected", "device_plugin_found", "gpu_resource_visible"}
+    core = [check for check in checks if check["id"] in core_ids]
+    statuses = {check["id"]: check["status"] for check in core}
+    if statuses.get("kubectl_available") != "success" or statuses.get("cluster_connected") == "not_available":
+        return "not_available"
+    if core and all(check["status"] == "success" for check in core):
+        return "success"
+    if any(check["status"] == "success" for check in checks):
+        return "partial"
+    return "failed"
+
+
+def _render_timeslicing_summary_markdown(report: dict[str, Any]) -> str:
+    """summary.md에 저장할 사람이 읽는 검증 리포트를 생성합니다."""
+    lines = [
+        "# Time-slicing 검증 리포트",
+        "",
+        f"- run_id: `{report['run_id']}`",
+        f"- created_at: `{report['created_at']}`",
+        f"- overall_status: `{report['overall_status']}`",
+        f"- log_dir: `{report['log_dir']}`",
+        "",
+        "## Check 결과",
+        "",
+        "| 상태 | 항목 | 원인 | 요약 |",
+        "| --- | --- | --- | --- |",
+    ]
+    for check in report["checks"]:
+        lines.append(
+            f"| `{check['status']}` | {check['label']} | `{check['reason_code']}` | {check['summary'].replace('|', '/')} |"
+        )
+    lines.extend(["", "## 환경 메모", "", report["environment_note"], ""])
+    return "\n".join(lines)

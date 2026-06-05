@@ -132,6 +132,69 @@ button:disabled {
   color: #4b5563;
 }
 
+.check-panel {
+  margin-top: 12px;
+}
+
+.check-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin-bottom: 8px;
+  color: #1f2937;
+}
+
+.check-table-wrap {
+  overflow-x: auto;
+}
+
+.check-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.check-table th,
+.check-table td {
+  border: 1px solid #d9e1ec;
+  padding: 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.check-table th {
+  background: #f3f6fb;
+}
+
+.check-status {
+  display: inline-block;
+  min-width: 78px;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-weight: 700;
+  text-align: center;
+  background: #eef2f7;
+  color: #374151;
+}
+
+.check-status.success {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.check-status.failed {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.check-status.partial,
+.check-status.not_available,
+.check-status.skipped {
+  background: #fef0c7;
+  color: #93370d;
+}
+
 .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));

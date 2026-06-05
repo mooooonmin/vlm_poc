@@ -118,6 +118,22 @@ kubectl -n kube-system logs -l app=nvidia-device-plugin-daemonset --tail=200
 kubectl describe nodes
 ```
 
+화면의 `Time-slicing 로그 수집` 버튼을 누르면 검증 1회마다 `logs/timeslicing/{timestamp}_{run_id}/` 폴더가 생성됩니다.
+
+| 경로 | 내용 |
+| --- | --- |
+| `summary.json` | 전체 상태, 단계별 check, 원인 코드, 원본 로그 경로를 담은 JSON 리포트 |
+| `summary.md` | 사람이 읽기 쉬운 Markdown 검증 리포트 |
+| `raw/*.txt` | `kubectl`, `nvidia-smi` 등 실제 명령의 stdout/stderr 원본 |
+| `manifest/` | 검증 시점의 time-slicing/vLLM manifest 복사본 |
+
+| 상태 | 의미 |
+| --- | --- |
+| `success` | 핵심 Kubernetes/GPU check가 모두 성공 |
+| `partial` | 일부 check는 성공했지만 device-plugin, GPU 리소스 등 일부 검증이 실패 |
+| `not_available` | 로컬 Windows처럼 Kubernetes 클러스터 연결이 없어 검증할 수 없는 상태 |
+| `failed` | 핵심 check가 모두 실패했거나 manifest 등 필수 조건이 부족한 상태 |
+
 중요: NVIDIA device plugin time-slicing의 `replicas`는 GPU 접근 슬롯을 oversubscribe하는 설정입니다. 실제 VRAM을 물리적으로 나누는 기능이 아니므로 여러 Pod가 같은 GPU에 큰 모델을 동시에 올리면 OOM이 발생할 수 있습니다.
 
 ## 참고 출처
