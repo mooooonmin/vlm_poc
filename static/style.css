@@ -503,6 +503,15 @@ pre {
   line-height: 1.65;
 }
 
+.log-path {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 details {
   margin-top: 8px;
 }

@@ -359,7 +359,7 @@ function renderJob(job) {
   } else {
     $("answer").textContent = `분석 중 · 프레임 ${sampledCount}개`;
   }
-  $("rawJson").textContent = JSON.stringify(job, null, 2);
+  $("jobLogPath").textContent = job.job_dir ? `로그: ${job.job_dir}\\job.json` : "";
 }
 
 function formatLoopChecks(job) {
@@ -399,7 +399,7 @@ function clearResult() {
   $("jobStatus").textContent = "작업을 준비 중입니다.";
   $("batchPanel").innerHTML = "";
   $("answer").textContent = "";
-  $("rawJson").textContent = "";
+  $("jobLogPath").textContent = "";
   $("frames").innerHTML = "";
 }
 

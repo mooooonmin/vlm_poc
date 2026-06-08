@@ -96,6 +96,7 @@ http://127.0.0.1:8080
 - `VLLM_WORKERS` 환경변수에 여러 vLLM endpoint를 쉼표로 넣으면 dispatcher가 ready 상태 worker에 job을 배정합니다.
 - 단일 RTX 4070 Ti에서 여러 VLM 요청을 동시에 보내면 VRAM 부족과 지연 원인을 구분하기 어려우므로 로컬 기본값은 worker 1개입니다.
 - 각 분석 요청은 `job_id`를 받고, `tmp/jobs/{job_id}/job.json`에 상태와 결과를 저장합니다.
+- 원본 vLLM 응답 JSON은 화면에 표시하지 않고 `tmp/jobs/{job_id}/job.json`의 `raw` 필드에 저장합니다.
 - batch job에는 `batch_id`, `batch_index`, `batch_size`가 함께 기록됩니다.
 - job 결과에는 `worker_id`, `worker_endpoint`, `queued_at`, `started_at`, `finished_at`이 기록됩니다.
 - 새 job 결과에는 `frame_extract_duration_ms`, `vllm_duration_ms`, `duration_ms`, `failure_stage`, `failure_reason`도 기록됩니다.
