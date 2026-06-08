@@ -61,6 +61,22 @@ STATIC_DIR = BASE_DIR / "static"
 MAX_SAMPLE_FRAMES = 12
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 MAX_VIDEO_DURATION_SEC = int(os.environ.get("MAX_VIDEO_DURATION_SEC", "1800"))
+KOREAN_RETRY_ENABLED = os.environ.get("KOREAN_RETRY_ENABLED", "1") != "0"
+KOREAN_SYSTEM_PROMPT = (
+    "너는 영상 관제 PoC의 한국어 분석 도우미다. "
+    "모든 답변은 반드시 한국어로만 작성한다. "
+    "다른 언어, 번역문, 설명용 영어 문장을 섞지 않는다. "
+    "영상에서 보이는 내용만 근거로 시간 순서대로 간결하게 요약한다."
+)
+KOREAN_RETRY_PROMPT_PREFIX = (
+    "이전 응답이 한국어가 아니면 실패로 간주된다. "
+    "반드시 한국어 문장으로만 답하라. "
+)
+KOREAN_REPAIR_PROMPT = (
+    "아래 모델 원문 응답을 한국어 한 문장으로 바꿔라. "
+    "원문에 보이는 텍스트나 상황만 사용하고, 새로운 사실을 만들지 마라.\n\n"
+    "모델 원문 응답:\n{answer}"
+)
 
 FRAME_DIR.mkdir(parents=True, exist_ok=True)
 load_existing_jobs(TMP_DIR)
@@ -85,15 +101,20 @@ def build_vllm_payload(
     prompt: str,
     frame_data_urls: list[str],
     max_tokens: int,
+    strict_korean: bool = False,
 ) -> dict[str, Any]:
     """추출 프레임들을 vLLM OpenAI 호환 멀티이미지 요청 형식으로 변환합니다."""
-    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    final_prompt = f"{KOREAN_RETRY_PROMPT_PREFIX}{prompt}" if strict_korean else prompt
+    content: list[dict[str, Any]] = [{"type": "text", "text": final_prompt}]
     for data_url in frame_data_urls:
         content.append({"type": "image_url", "image_url": {"url": data_url}})
 
     return {
         "model": model_id,
-        "messages": [{"role": "user", "content": content}],
+        "messages": [
+            {"role": "system", "content": KOREAN_SYSTEM_PROMPT},
+            {"role": "user", "content": content},
+        ],
         "max_tokens": max_tokens,
         "temperature": 0,
     }
@@ -115,6 +136,59 @@ def call_vllm(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     response = requests.post(endpoint, json=payload, timeout=180)
     response.raise_for_status()
     return response.json()
+
+
+def build_text_only_payload(model_id: str, prompt: str, max_tokens: int) -> dict[str, Any]:
+    """이미지 없이 vLLM에 텍스트 정리/번역 요청을 보낼 때 사용하는 payload입니다."""
+    return {
+        "model": model_id,
+        "messages": [
+            {"role": "system", "content": KOREAN_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": max_tokens,
+        "temperature": 0,
+    }
+
+
+def assess_korean_response(answer: str) -> dict[str, Any]:
+    """
+    모델 응답이 한국어인지 간단히 점검합니다.
+
+    완전한 언어 판별기는 아니지만, PoC 반복 테스트에서는 "한국어 답변이 아닌 결과"를 빠르게 찾아내는
+    품질 신호로 충분합니다. 한글 글자 수와 전체 문자 대비 비율을 함께 기록합니다.
+    """
+    text = answer.strip()
+    hangul_count = sum(1 for char in text if "가" <= char <= "힣")
+    letter_count = sum(1 for char in text if char.isalpha())
+    hangul_ratio = round(hangul_count / letter_count, 3) if letter_count else 0
+    return {
+        "ok": hangul_count >= 5 and hangul_ratio >= 0.2,
+        "hangul_count": hangul_count,
+        "letter_count": letter_count,
+        "hangul_ratio": hangul_ratio,
+    }
+
+
+def append_gpu_snapshot(job_id: str, stage: str) -> None:
+    """
+    job 처리 중 GPU 상태를 스냅샷으로 남깁니다.
+
+    같은 영상 요청이라도 GPU 메모리 상태에 따라 OOM이나 지연이 달라질 수 있으므로,
+    분석 시작/프레임 추출 후/vLLM 요청 전후/종료 시점의 `nvidia-smi` 결과를 job.json에 저장합니다.
+    """
+    job = get_job(job_id)
+    if not job:
+        return
+    snapshots = list(job.get("gpu_snapshots") or [])
+    snapshots.append(
+        {
+            "stage": stage,
+            "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "gpu": get_gpu_status(),
+        }
+    )
+    update_job(job_id, gpu_snapshots=snapshots[-20:])
 
 
 def validate_analysis_inputs(
@@ -220,6 +294,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         settings = job["settings"]
         job_dir = Path(job["job_dir"])
         worker_endpoint = str(worker["endpoint"])
+        append_gpu_snapshot(job_id, "job_start")
 
         # worker_id/worker_endpoint를 job.json에 남겨야 여러 영상 요청을 테스트할 때
         # 어떤 vLLM 서버가 어떤 요청을 처리했는지 성공/실패 원인을 추적할 수 있습니다.
@@ -230,6 +305,12 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             worker_id=worker["worker_id"],
             worker_endpoint=worker_endpoint,
             started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            loop_checks={
+                "1_korean_response": "pending",
+                "2_real_video_stats": "pending",
+                "3_gpu_snapshot": "running",
+                "4_worker_assignment": "done",
+            },
         )
 
         current_stage = "input_prepare"
@@ -277,6 +358,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             frame_extract_duration_ms=frame_extract_duration_ms,
             message=f"{len(frames)}개 프레임을 추출했습니다. 프레임 추출 시간: {frame_extract_duration_ms}ms",
         )
+        append_gpu_snapshot(job_id, "frame_extract_finished")
 
         current_stage = "payload_prepare"
         update_job(job_id, message="프레임을 vLLM 요청용 base64 이미지로 변환하는 중입니다.")
@@ -290,28 +372,96 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
 
         current_stage = "vllm_request"
         vllm_request_started_perf = time.perf_counter()
+        append_gpu_snapshot(job_id, "vllm_request_start")
         update_job(
             job_id,
             vllm_request_started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             message=f"{worker['worker_id']} vLLM endpoint로 영상 분석 요청을 보내는 중입니다.",
         )
         raw_response = call_vllm(worker_endpoint, payload)
+        answer = extract_answer(raw_response)
+        korean_check = assess_korean_response(answer)
+        korean_retry_used = False
+        korean_repair_used = False
+        korean_fallback_used = False
+        if KOREAN_RETRY_ENABLED and not korean_check["ok"]:
+            update_job(
+                job_id,
+                message="응답이 한국어 기준을 통과하지 못해 한국어 강제 프롬프트로 1회 재요청합니다.",
+                korean_check=korean_check,
+            )
+            retry_payload = build_vllm_payload(
+                str(settings["model_id"]),
+                str(settings["prompt"]),
+                frame_data_urls,
+                int(settings["max_tokens"]),
+                strict_korean=True,
+            )
+            raw_response = call_vllm(worker_endpoint, retry_payload)
+            answer = extract_answer(raw_response)
+            korean_check = assess_korean_response(answer)
+            korean_retry_used = True
+        if KOREAN_RETRY_ENABLED and not korean_check["ok"] and answer.strip():
+            update_job(
+                job_id,
+                message="재요청 응답도 한국어 기준을 통과하지 못해 원문 응답을 한국어로 정리합니다.",
+                korean_check=korean_check,
+                korean_retry_used=korean_retry_used,
+            )
+            repair_payload = build_text_only_payload(
+                str(settings["model_id"]),
+                KOREAN_REPAIR_PROMPT.format(answer=answer.strip()),
+                int(settings["max_tokens"]),
+            )
+            repair_response = call_vllm(worker_endpoint, repair_payload)
+            repair_answer = extract_answer(repair_response)
+            repair_check = assess_korean_response(repair_answer)
+            if repair_answer.strip():
+                raw_response = {
+                    "original_multimodal_response": raw_response,
+                    "korean_repair_response": repair_response,
+                }
+                answer = repair_answer
+                korean_check = repair_check
+                korean_repair_used = True
+        if not korean_check["ok"]:
+            answer = (
+                "모델이 한국어 응답 지시를 따르지 않았습니다. "
+                f"원문 응답은 다음과 같습니다: {answer.strip() or '(빈 응답)'}"
+            )
+            korean_check = assess_korean_response(answer)
+            korean_fallback_used = True
         vllm_duration_ms = elapsed_ms(vllm_request_started_perf)
+        append_gpu_snapshot(job_id, "vllm_request_finished")
+        loop_checks = {
+            "1_korean_response": "done" if korean_check["ok"] else "failed",
+            "2_real_video_stats": "done",
+            "3_gpu_snapshot": "done",
+            "4_worker_assignment": "done",
+        }
         update_job(
             job_id,
             status="done",
             message=f"분석이 완료되었습니다. vLLM 요청 시간: {vllm_duration_ms}ms",
-            answer=extract_answer(raw_response),
+            answer=answer,
             raw=raw_response,
+            korean_check=korean_check,
+            korean_retry_used=korean_retry_used,
+            korean_repair_used=korean_repair_used,
+            korean_fallback_used=korean_fallback_used,
+            loop_checks=loop_checks,
             vllm_request_finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             vllm_duration_ms=vllm_duration_ms,
             finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             duration_ms=elapsed_ms(job_started_perf),
         )
+        append_gpu_snapshot(job_id, "job_finished")
     except requests.HTTPError as error:
         detail = error.response.text if error.response is not None else str(error)
+        append_gpu_snapshot(job_id, "job_failed")
         mark_job_failed(job_id, f"vLLM 요청 실패: {detail}", error, current_stage, job_started_perf)
     except Exception as error:
+        append_gpu_snapshot(job_id, "job_failed")
         mark_job_failed(job_id, classify_user_error(error), error, current_stage, job_started_perf)
 
 
@@ -334,6 +484,12 @@ def mark_job_failed(
         "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "failure_stage": failure_stage,
         "failure_reason": type(error).__name__,
+        "loop_checks": {
+            "1_korean_response": "skipped" if failure_stage != "vllm_request" else "failed",
+            "2_real_video_stats": "failed" if failure_stage in {"input_prepare", "video_download", "frame_extract"} else "done",
+            "3_gpu_snapshot": "done",
+            "4_worker_assignment": "done",
+        },
         "error": {
             "message": message,
             "type": type(error).__name__,
@@ -474,7 +630,7 @@ async def api_create_video_job(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로 요약해줘."),
+    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로만 요약해줘. 다른 언어는 사용하지 말고, 보이는 내용만 근거로 작성해줘."),
 ) -> JSONResponse:
     """영상 분석 작업을 생성하고 즉시 job 상태를 반환합니다."""
     job = await create_video_job_from_form(video_file, video_url, frame_count, max_tokens, model_id, endpoint, prompt)
@@ -510,7 +666,7 @@ async def api_analyze_video_compat(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로 요약해줘."),
+    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로만 요약해줘. 다른 언어는 사용하지 말고, 보이는 내용만 근거로 작성해줘."),
 ) -> JSONResponse:
     """
     기존 클라이언트 호환용 API입니다.

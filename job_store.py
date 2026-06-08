@@ -56,6 +56,12 @@ def create_job(base_dir: Path, source: dict[str, Any], settings: dict[str, Any])
         "vllm_duration_ms": None,
         "failure_stage": None,
         "failure_reason": None,
+        "korean_check": None,
+        "korean_retry_used": False,
+        "korean_repair_used": False,
+        "korean_fallback_used": False,
+        "loop_checks": {},
+        "gpu_snapshots": [],
         "job_dir": str(job_dir),
         "source": source,
         "settings": settings,
@@ -120,6 +126,12 @@ def get_job_stats(limit: int = 50) -> dict[str, Any]:
     worker_counts: dict[str, int] = {}
     failure_counts: dict[str, int] = {}
     durations = []
+    korean_ok_count = 0
+    korean_failed_count = 0
+    korean_retry_count = 0
+    korean_repair_count = 0
+    korean_fallback_count = 0
+    gpu_snapshot_job_count = 0
 
     for job in jobs:
         status = str(job.get("status", ""))
@@ -137,6 +149,21 @@ def get_job_stats(limit: int = 50) -> dict[str, Any]:
         if isinstance(duration_ms, (int, float)):
             durations.append(float(duration_ms))
 
+        korean_check = job.get("korean_check")
+        if isinstance(korean_check, dict):
+            if korean_check.get("ok"):
+                korean_ok_count += 1
+            else:
+                korean_failed_count += 1
+        if job.get("korean_retry_used"):
+            korean_retry_count += 1
+        if job.get("korean_repair_used"):
+            korean_repair_count += 1
+        if job.get("korean_fallback_used"):
+            korean_fallback_count += 1
+        if job.get("gpu_snapshots"):
+            gpu_snapshot_job_count += 1
+
     average_duration_ms = round(sum(durations) / len(durations), 1) if durations else None
     return {
         "limit": limit,
@@ -148,6 +175,12 @@ def get_job_stats(limit: int = 50) -> dict[str, Any]:
         "timed_job_count": len(durations),
         "worker_counts": worker_counts,
         "failure_counts": failure_counts,
+        "korean_ok_count": korean_ok_count,
+        "korean_failed_count": korean_failed_count,
+        "korean_retry_count": korean_retry_count,
+        "korean_repair_count": korean_repair_count,
+        "korean_fallback_count": korean_fallback_count,
+        "gpu_snapshot_job_count": gpu_snapshot_job_count,
     }
 
 

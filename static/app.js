@@ -247,6 +247,11 @@ function renderJobStats(stats) {
       <div><strong>${Number(status.done || 0)}</strong><span>성공</span></div>
       <div><strong>${Number(status.failed || 0)}</strong><span>실패</span></div>
       <div><strong>${stats.average_duration_ms == null ? "-" : `${stats.average_duration_ms}ms`}</strong><span>평균 처리시간</span></div>
+      <div><strong>${Number(stats.korean_ok_count || 0)}</strong><span>한국어 통과</span></div>
+      <div><strong>${Number(stats.korean_retry_count || 0)}</strong><span>한국어 재요청</span></div>
+      <div><strong>${Number(stats.korean_repair_count || 0)}</strong><span>한국어 복구</span></div>
+      <div><strong>${Number(stats.korean_fallback_count || 0)}</strong><span>한국어 fallback</span></div>
+      <div><strong>${Number(stats.gpu_snapshot_job_count || 0)}</strong><span>GPU 로그 job</span></div>
     </div>
     <div class="hint">worker별 처리: ${escapeHtml(workerText)}</div>
     <div class="hint">실패 원인: ${escapeHtml(failureText)}</div>
@@ -276,13 +281,32 @@ function renderJob(job) {
     </div>
   `).join("");
   if (job.status === "done") {
-    $("answer").textContent = `${job.worker_id ? `[${job.worker_id}] ${job.worker_endpoint || ""}\n` : ""}${formatJobTiming(job)}\n${job.answer || "(응답 텍스트 없음)"}`;
+    $("answer").textContent = `${job.worker_id ? `[${job.worker_id}] ${job.worker_endpoint || ""}\n` : ""}${formatLoopChecks(job)}\n${formatJobTiming(job)}\n${job.answer || "(응답 텍스트 없음)"}`;
   } else if (job.status === "failed") {
-    $("answer").textContent = `${formatJobTiming(job)}\n실패 단계: ${job.failure_stage || "-"}\n실패 원인: ${job.failure_reason || "-"}\n${job.error?.message || job.message || "분석 실패"}`;
+    $("answer").textContent = `${formatLoopChecks(job)}\n${formatJobTiming(job)}\n실패 단계: ${job.failure_stage || "-"}\n실패 원인: ${job.failure_reason || "-"}\n${job.error?.message || job.message || "분석 실패"}`;
   } else {
     $("answer").textContent = `분석 진행 중입니다. 추출된 프레임: ${sampledCount}개${job.worker_id ? `\n배정 worker: ${job.worker_id}` : ""}`;
   }
   $("rawJson").textContent = JSON.stringify(job, null, 2);
+}
+
+function formatLoopChecks(job) {
+  const checks = job.loop_checks || {};
+  const korean = job.korean_check || {};
+  const gpuCount = Array.isArray(job.gpu_snapshots) ? job.gpu_snapshots.length : 0;
+  const retry = job.korean_retry_used ? "사용" : "미사용";
+  const repair = job.korean_repair_used ? "사용" : "미사용";
+  const fallback = job.korean_fallback_used ? "사용" : "미사용";
+  return [
+    "[루프 점검]",
+    `1 한국어 응답: ${checks["1_korean_response"] || "-"} (한글 ${korean.hangul_count ?? "-"}자, 비율 ${korean.hangul_ratio ?? "-"})`,
+    `2 실제 영상/통계: ${checks["2_real_video_stats"] || "-"}`,
+    `3 GPU 스냅샷: ${checks["3_gpu_snapshot"] || "-"} (${gpuCount}개)`,
+    `4 Worker 배정: ${checks["4_worker_assignment"] || "-"} (${job.worker_id || "-"})`,
+    `한국어 재요청: ${retry}`,
+    `한국어 복구: ${repair}`,
+    `한국어 fallback: ${fallback}`,
+  ].join("\n");
 }
 
 function formatJobTiming(job) {

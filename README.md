@@ -92,6 +92,11 @@ http://127.0.0.1:8080
 - 각 분석 요청은 `job_id`를 받고, `tmp/jobs/{job_id}/job.json`에 상태와 결과를 저장합니다.
 - job 결과에는 `worker_id`, `worker_endpoint`, `queued_at`, `started_at`, `finished_at`이 기록됩니다.
 - 새 job 결과에는 `frame_extract_duration_ms`, `vllm_duration_ms`, `duration_ms`, `failure_stage`, `failure_reason`도 기록됩니다.
+- 반복 테스트 루프는 `loop_checks`에 기록됩니다: `1_korean_response`, `2_real_video_stats`, `3_gpu_snapshot`, `4_worker_assignment`.
+- 한국어 응답 품질은 `korean_check`에 한글 글자 수와 한글 비율로 기록하고, 기준 미달이면 기본 1회 재요청합니다. 재요청 여부는 `korean_retry_used`에 남습니다.
+- 재요청 후에도 한국어가 아니면 원문 응답을 텍스트-only 요청으로 한국어 정리합니다. 이 복구 단계 사용 여부는 `korean_repair_used`에 남습니다.
+- 복구 후에도 모델이 한국어를 따르지 않으면 앱이 한국어 경고문으로 원문 응답을 감싸서 표시합니다. 이 후처리 여부는 `korean_fallback_used`에 남습니다.
+- GPU 상태는 job 단계별 `gpu_snapshots`에 저장합니다. 분석 시작, 프레임 추출 후, vLLM 요청 전후, 실패/완료 지점을 확인하는 용도입니다.
 - 상태값은 `queued`, `running`, `done`, `failed`입니다.
 
 다중 worker 설정 예시:
