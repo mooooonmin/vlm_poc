@@ -47,6 +47,15 @@ def create_job(base_dir: Path, source: dict[str, Any], settings: dict[str, Any])
         "queued_at": now_text(),
         "started_at": None,
         "finished_at": None,
+        "frame_extract_started_at": None,
+        "frame_extract_finished_at": None,
+        "vllm_request_started_at": None,
+        "vllm_request_finished_at": None,
+        "duration_ms": None,
+        "frame_extract_duration_ms": None,
+        "vllm_duration_ms": None,
+        "failure_stage": None,
+        "failure_reason": None,
         "job_dir": str(job_dir),
         "source": source,
         "settings": settings,
@@ -96,6 +105,50 @@ def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
     with STORE_LOCK:
         jobs = sorted(JOBS.values(), key=lambda item: item.get("created_at", ""), reverse=True)
         return [dict(job) for job in jobs[:limit]]
+
+
+def get_job_stats(limit: int = 50) -> dict[str, Any]:
+    """
+    최근 작업의 성공/실패/처리시간 요약을 반환합니다.
+
+    오래된 job.json에는 duration_ms 같은 새 필드가 없을 수 있습니다.
+    이 경우 통계 계산에서 해당 시간값만 제외하고, 성공/실패 개수는 그대로 반영합니다.
+    """
+    jobs = list_jobs(limit=limit)
+    total = len(jobs)
+    status_counts = {"queued": 0, "running": 0, "done": 0, "failed": 0}
+    worker_counts: dict[str, int] = {}
+    failure_counts: dict[str, int] = {}
+    durations = []
+
+    for job in jobs:
+        status = str(job.get("status", ""))
+        if status in status_counts:
+            status_counts[status] += 1
+
+        worker_id = job.get("worker_id") or "미배정"
+        worker_counts[str(worker_id)] = worker_counts.get(str(worker_id), 0) + 1
+
+        if status == "failed":
+            reason = job.get("failure_reason") or job.get("failure_stage") or "unknown"
+            failure_counts[str(reason)] = failure_counts.get(str(reason), 0) + 1
+
+        duration_ms = job.get("duration_ms")
+        if isinstance(duration_ms, (int, float)):
+            durations.append(float(duration_ms))
+
+    average_duration_ms = round(sum(durations) / len(durations), 1) if durations else None
+    return {
+        "limit": limit,
+        "total": total,
+        "status_counts": status_counts,
+        "success_count": status_counts["done"],
+        "failed_count": status_counts["failed"],
+        "average_duration_ms": average_duration_ms,
+        "timed_job_count": len(durations),
+        "worker_counts": worker_counts,
+        "failure_counts": failure_counts,
+    }
 
 
 def load_existing_jobs(base_dir: Path) -> None:

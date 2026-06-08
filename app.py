@@ -4,8 +4,8 @@
 
 구성 요약:
 - FastAPI는 화면, runtime 상태 API, 영상 분석 job API를 제공합니다.
-- 영상 분석은 요청 HTTP 연결 안에서 끝까지 처리하지 않고, 백그라운드 순차 worker가 처리합니다.
-- 단일 RTX 4070 Ti PoC이므로 기본값은 병렬 분석이 아니라 순차 분석입니다.
+- 영상 분석은 요청 HTTP 연결 안에서 끝까지 처리하지 않고, dispatcher가 ready 상태 vLLM worker에 배정합니다.
+- 단일 RTX 4070 Ti PoC의 기본값은 worker 1개이므로 기존처럼 순차 분석입니다.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from job_store import create_job, get_job, list_jobs, load_existing_jobs, update_job
+from job_store import create_job, get_job, get_job_stats, list_jobs, load_existing_jobs, update_job
 from runtime_utils import (
     DEFAULT_GPU_MEMORY_UTILIZATION,
     DEFAULT_MAX_MODEL_LEN,
@@ -213,6 +213,8 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
     if not job:
         return
 
+    job_started_perf = time.perf_counter()
+    current_stage = "startup"
     try:
         source = job["source"]
         settings = job["settings"]
@@ -230,14 +232,19 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         )
 
+        current_stage = "input_prepare"
         update_job(job_id, message="영상 입력을 준비하는 중입니다.")
         if source["type"] == "upload":
             video_path = Path(source["path"])
         else:
+            current_stage = "video_download"
             video_path = download_video(source["url"], job_dir)
             source["path"] = str(video_path)
             update_job(job_id, source=source)
 
+        current_stage = "frame_extract"
+        frame_extract_started_perf = time.perf_counter()
+        update_job(job_id, frame_extract_started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
         update_job(job_id, message="OpenCV로 영상 메타데이터와 샘플 프레임을 추출하는 중입니다.")
         sample_result = sample_video_frames(video_path, FRAME_DIR, int(settings["frame_count"]))
         if sample_result.duration_sec > MAX_VIDEO_DURATION_SEC:
@@ -261,8 +268,17 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             "duration_sec": sample_result.duration_sec,
             "sampled_frame_count": len(sample_result.frames),
         }
-        update_job(job_id, video_info=video_info, frames=frames, message=f"{len(frames)}개 프레임을 추출했습니다.")
+        frame_extract_duration_ms = elapsed_ms(frame_extract_started_perf)
+        update_job(
+            job_id,
+            video_info=video_info,
+            frames=frames,
+            frame_extract_finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            frame_extract_duration_ms=frame_extract_duration_ms,
+            message=f"{len(frames)}개 프레임을 추출했습니다. 프레임 추출 시간: {frame_extract_duration_ms}ms",
+        )
 
+        current_stage = "payload_prepare"
         update_job(job_id, message="프레임을 vLLM 요청용 base64 이미지로 변환하는 중입니다.")
         frame_data_urls = [encode_frame_to_data_url(Path(frame["path"])) for frame in frames]
         payload = build_vllm_payload(
@@ -272,35 +288,67 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             int(settings["max_tokens"]),
         )
 
-        update_job(job_id, message=f"{worker['worker_id']} vLLM endpoint로 영상 분석 요청을 보내는 중입니다.")
+        current_stage = "vllm_request"
+        vllm_request_started_perf = time.perf_counter()
+        update_job(
+            job_id,
+            vllm_request_started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            message=f"{worker['worker_id']} vLLM endpoint로 영상 분석 요청을 보내는 중입니다.",
+        )
         raw_response = call_vllm(worker_endpoint, payload)
+        vllm_duration_ms = elapsed_ms(vllm_request_started_perf)
         update_job(
             job_id,
             status="done",
-            message="분석이 완료되었습니다.",
+            message=f"분석이 완료되었습니다. vLLM 요청 시간: {vllm_duration_ms}ms",
             answer=extract_answer(raw_response),
             raw=raw_response,
+            vllm_request_finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            vllm_duration_ms=vllm_duration_ms,
             finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+            duration_ms=elapsed_ms(job_started_perf),
         )
     except requests.HTTPError as error:
         detail = error.response.text if error.response is not None else str(error)
-        mark_job_failed(job_id, f"vLLM 요청 실패: {detail}", error)
+        mark_job_failed(job_id, f"vLLM 요청 실패: {detail}", error, current_stage, job_started_perf)
     except Exception as error:
-        mark_job_failed(job_id, classify_user_error(error), error)
+        mark_job_failed(job_id, classify_user_error(error), error, current_stage, job_started_perf)
 
 
-def mark_job_failed(job_id: str, message: str, error: Exception) -> None:
+def elapsed_ms(start_perf: float) -> int:
+    """time.perf_counter 기준 경과 시간을 ms 정수로 반환합니다."""
+    return int((time.perf_counter() - start_perf) * 1000)
+
+
+def mark_job_failed(
+    job_id: str,
+    message: str,
+    error: Exception,
+    failure_stage: str = "unknown",
+    job_started_perf: float | None = None,
+) -> None:
     """실패 상태와 디버깅용 traceback을 job.json에 저장합니다."""
-    update_job(
-        job_id,
-        status="failed",
-        message=message,
-        finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
-        error={
+    changes: dict[str, Any] = {
+        "status": "failed",
+        "message": message,
+        "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "failure_stage": failure_stage,
+        "failure_reason": type(error).__name__,
+        "error": {
             "message": message,
             "type": type(error).__name__,
             "traceback": traceback.format_exc(),
         },
+    }
+    if job_started_perf is not None:
+        changes["duration_ms"] = elapsed_ms(job_started_perf)
+    if failure_stage == "vllm_request":
+        changes["vllm_request_finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    if failure_stage == "frame_extract":
+        changes["frame_extract_finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    update_job(
+        job_id,
+        **changes,
     )
 
 
@@ -437,6 +485,12 @@ async def api_create_video_job(
 def api_list_jobs(limit: int = 20) -> dict[str, Any]:
     """최근 영상 분석 작업 목록을 반환합니다."""
     return {"jobs": list_jobs(limit=limit)}
+
+
+@app.get("/api/jobs/stats")
+def api_job_stats(limit: int = 50) -> dict[str, Any]:
+    """최근 영상 분석 작업의 성공/실패/처리시간/worker별 요약을 반환합니다."""
+    return get_job_stats(limit=limit)
 
 
 @app.get("/api/jobs/{job_id}")
