@@ -36,25 +36,18 @@ async function refreshRuntime() {
   ]);
 
   const lifecycle = lifecycleLabels[vllm.lifecycle_stage] || vllm.lifecycle_stage || "상태 불명";
-  const vllmState = vllm.running
-    ? "vLLM API가 응답 중입니다. 테스트가 끝나면 vLLM 종료 / GPU 해제 버튼으로 컨테이너를 내리세요."
-    : "vLLM API가 아직 응답하지 않습니다. 시작 직후라면 모델 다운로드/로딩이 끝날 때까지 기다리세요.";
-
-  $("runtimeStatus").textContent = `GPU: ${gpu.ok ? "확인됨" : "확인 실패"} / vLLM: ${lifecycle} - ${vllmState}`;
+  $("runtimeStatus").textContent = `GPU ${gpu.ok ? "정상" : "확인 실패"} · vLLM ${lifecycle}`;
   $("runtimeBadges").innerHTML = [
     `모델: ${config.default_model_id}`,
-    `MAX_MODEL_LEN: ${config.max_model_len}`,
-    `GPU_MEMORY_UTILIZATION: ${config.gpu_memory_utilization}`,
-    `HF_TOKEN: ${config.hf_token_configured ? "설정됨" : "미설정"}`,
-    `분석 처리: ${config.processing_mode}`,
-    `vLLM worker: ${(workers.workers || []).length}개`,
+    `worker ${(workers.workers || []).length}개`,
+    config.processing_mode,
   ].map((text) => `<span>${escapeHtml(text)}</span>`).join("");
   renderWorkers(workers.workers || []);
   $("runtimeDetail").textContent = JSON.stringify({ gpu, vllm, timeslicing, config, workers }, null, 2);
 }
 
 async function startVllm() {
-  $("runtimeStatus").textContent = "vLLM 컨테이너 시작 요청 중입니다. Docker 이미지 pull 또는 모델 로딩은 오래 걸릴 수 있습니다.";
+  $("runtimeStatus").textContent = "vLLM 시작 중";
   const data = await fetchJson("/api/start-vllm", { method: "POST" });
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
   await waitForVllmReady();
@@ -77,7 +70,7 @@ async function waitForVllmReady() {
 }
 
 async function stopVllm() {
-  $("runtimeStatus").textContent = "vLLM 컨테이너 종료 요청 중입니다. 완료되면 GPU 메모리가 반환됩니다.";
+  $("runtimeStatus").textContent = "vLLM 종료 중";
   const data = await fetchJson("/api/stop-vllm", { method: "POST" });
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
   await refreshRuntime();
@@ -86,14 +79,14 @@ async function stopVllm() {
 async function loadVllmLogs() {
   const data = await fetchJson("/api/vllm/logs?lines=160");
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
-  $("runtimeStatus").textContent = "vLLM 컨테이너 로그 tail을 불러왔습니다.";
+  $("runtimeStatus").textContent = "vLLM 로그 조회 완료";
 }
 
 async function refreshWorkers() {
   const data = await fetchJson("/api/workers/refresh", { method: "POST" });
   renderWorkers(data.workers || []);
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
-  $("runtimeStatus").textContent = "vLLM worker 상태를 새로고침했습니다.";
+  $("runtimeStatus").textContent = "Worker 상태 갱신 완료";
 }
 
 function renderWorkers(workers) {
@@ -114,22 +107,20 @@ function renderWorkers(workers) {
 }
 
 async function collectTimeslicingLogs() {
-  $("runtimeStatus").textContent = "time-slicing 관련 Kubernetes/GPU 로그를 수집 중입니다.";
+  $("runtimeStatus").textContent = "Time-slicing 로그 수집 중";
   const data = await fetchJson("/api/timeslicing/logs", { method: "POST" });
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
   renderTimeslicingResult(data);
   $("runtimeStatus").textContent =
-    `time-slicing 로그 수집 완료: ${data.overall_status || "상태 없음"} / ${data.log_dir || "로그 경로 없음"}`;
+    `Time-slicing 로그 수집 완료: ${data.overall_status || "상태 없음"}`;
 }
 
 function renderTimeslicingResult(data) {
   const checks = data.checks || [];
   $("timeslicingResult").innerHTML = `
     <div class="check-header">
-      <strong>Time-slicing 검증 결과: ${escapeHtml(data.overall_status || "unknown")}</strong>
-      <span>run_id: ${escapeHtml(data.run_id || "-")}</span>
+      <strong>Time-slicing: ${escapeHtml(data.overall_status || "unknown")}</strong>
     </div>
-    <div class="hint">summary.md: ${escapeHtml(data.summary_md_path || "-")}</div>
     <div class="check-table-wrap">
       <table class="check-table">
         <thead>
@@ -159,7 +150,7 @@ async function submitAnalysis(event) {
   event.preventDefault();
   const button = $("analyzeBtn");
   button.disabled = true;
-  $("analyzeStatus").textContent = "영상 분석 batch를 생성하는 중입니다.";
+  $("analyzeStatus").textContent = "분석 요청 중";
   clearResult();
 
   try {
@@ -167,7 +158,7 @@ async function submitAnalysis(event) {
     const batch = await fetchJson("/api/jobs/video-batch", { method: "POST", body: formData });
     activeBatchId = batch.batch_id;
     activeJobId = batch.jobs?.[0]?.job_id || batch.created_jobs?.[0]?.job_id || null;
-    $("analyzeStatus").textContent = `batch 생성 완료: ${activeBatchId}`;
+    $("analyzeStatus").textContent = `분석 시작: ${batch.total}개`;
     renderBatch(batch);
     if (activeJobId) {
       const firstJob = (batch.jobs || batch.created_jobs || []).find((job) => job.job_id === activeJobId);
@@ -178,7 +169,7 @@ async function submitAnalysis(event) {
     await refreshJobs();
     startBatchPolling(activeBatchId);
   } catch (error) {
-    $("analyzeStatus").textContent = "batch 생성 실패";
+    $("analyzeStatus").textContent = "분석 요청 실패";
     $("answer").textContent = String(error);
   } finally {
     button.disabled = false;
@@ -297,18 +288,17 @@ function renderJobStats(stats) {
 
   $("jobStats").innerHTML = `
     <div class="stat-grid">
-      <div><strong>${Number(stats.total || 0)}</strong><span>최근 job</span></div>
+      <div><strong>${Number(stats.total || 0)}</strong><span>최근</span></div>
       <div><strong>${Number(status.done || 0)}</strong><span>성공</span></div>
       <div><strong>${Number(status.failed || 0)}</strong><span>실패</span></div>
-      <div><strong>${stats.average_duration_ms == null ? "-" : `${stats.average_duration_ms}ms`}</strong><span>평균 처리시간</span></div>
-      <div><strong>${Number(stats.korean_ok_count || 0)}</strong><span>한국어 통과</span></div>
-      <div><strong>${Number(stats.korean_retry_count || 0)}</strong><span>한국어 재요청</span></div>
-      <div><strong>${Number(stats.korean_repair_count || 0)}</strong><span>한국어 복구</span></div>
-      <div><strong>${Number(stats.korean_fallback_count || 0)}</strong><span>한국어 fallback</span></div>
-      <div><strong>${Number(stats.gpu_snapshot_job_count || 0)}</strong><span>GPU 로그 job</span></div>
+      <div><strong>${stats.average_duration_ms == null ? "-" : `${stats.average_duration_ms}ms`}</strong><span>평균</span></div>
     </div>
-    <div class="hint">worker별 처리: ${escapeHtml(workerText)}</div>
-    <div class="hint">실패 원인: ${escapeHtml(failureText)}</div>
+    <details>
+      <summary>상세 통계</summary>
+      <div class="hint">worker: ${escapeHtml(workerText)}</div>
+      <div class="hint">실패: ${escapeHtml(failureText)}</div>
+      <div class="hint">한국어 통과 ${Number(stats.korean_ok_count || 0)} · 재요청 ${Number(stats.korean_retry_count || 0)} · fallback ${Number(stats.korean_fallback_count || 0)}</div>
+    </details>
   `;
 }
 
@@ -334,9 +324,9 @@ function renderBatch(batch) {
   const counts = batch.status_counts || {};
   $("batchPanel").innerHTML = `
     <div class="batch-summary">
-      <strong>Batch ${escapeHtml(batch.batch_id || "-")}</strong>
-      <div>${Number(batch.finished || 0)} / ${Number(batch.total || 0)} 완료 · 상태: ${escapeHtml(batch.status || "-")}</div>
-      <div class="hint">done ${Number(counts.done || 0)} / running ${Number(counts.running || 0)} / queued ${Number(counts.queued || 0)} / failed ${Number(counts.failed || 0)}</div>
+      <strong>${Number(batch.finished || 0)} / ${Number(batch.total || 0)} 완료</strong>
+      <span>${escapeHtml(batch.status || "-")}</span>
+      <small>성공 ${Number(counts.done || 0)} · 진행 ${Number(counts.running || 0)} · 대기 ${Number(counts.queued || 0)} · 실패 ${Number(counts.failed || 0)}</small>
     </div>
     <div class="batch-jobs">
       ${(batch.jobs || []).map((job) => `
@@ -354,8 +344,8 @@ function renderJob(job) {
   const sampledCount = job.video_info?.sampled_frame_count ?? 0;
   const workerText = job.worker_id ? ` / worker: ${job.worker_id}` : "";
   const durationText = job.duration_ms == null ? "" : ` / ${job.duration_ms}ms`;
-  $("jobStatus").textContent = `작업 ${job.job_id} / 상태: ${job.status}${workerText}${durationText} / ${job.message || ""}`;
-  $("analyzeStatus").textContent = `현재 작업: ${job.job_id} (${job.status})`;
+  $("jobStatus").textContent = `${job.source?.name || job.job_id} · ${job.status}${workerText}${durationText}`;
+  $("analyzeStatus").textContent = `현재: ${job.status}`;
   $("frames").innerHTML = (job.frames || []).map((frame) => `
     <div class="frame-card">
       <img src="${frame.preview_url}" alt="sample frame ${frame.index}" />
@@ -363,11 +353,11 @@ function renderJob(job) {
     </div>
   `).join("");
   if (job.status === "done") {
-    $("answer").textContent = `${job.worker_id ? `[${job.worker_id}] ${job.worker_endpoint || ""}\n` : ""}${formatLoopChecks(job)}\n${formatJobTiming(job)}\n${job.answer || "(응답 텍스트 없음)"}`;
+    $("answer").textContent = job.answer || "(응답 텍스트 없음)";
   } else if (job.status === "failed") {
-    $("answer").textContent = `${formatLoopChecks(job)}\n${formatJobTiming(job)}\n실패 단계: ${job.failure_stage || "-"}\n실패 원인: ${job.failure_reason || "-"}\n${job.error?.message || job.message || "분석 실패"}`;
+    $("answer").textContent = `실패: ${job.failure_reason || job.error?.message || job.message || "분석 실패"}`;
   } else {
-    $("answer").textContent = `분석 진행 중입니다. 추출된 프레임: ${sampledCount}개${job.worker_id ? `\n배정 worker: ${job.worker_id}` : ""}`;
+    $("answer").textContent = `분석 중 · 프레임 ${sampledCount}개`;
   }
   $("rawJson").textContent = JSON.stringify(job, null, 2);
 }
