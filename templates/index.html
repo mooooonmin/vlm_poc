@@ -56,20 +56,33 @@
           </div>
           <div class="row">
             <div class="field">
-              <label for="frameCount">샘플 프레임 수</label>
+              <div class="field-label-row">
+                <label for="frameCount">샘플 프레임 수</label>
+                <span class="range-note">1~12</span>
+              </div>
               <input id="frameCount" name="frame_count" type="number" min="1" max="12" value="6" />
+              <div class="hint">VLM에 보낼 이미지 수입니다. 높을수록 VRAM 사용량과 응답 시간이 늘어납니다.</div>
             </div>
             <div class="field">
-              <label for="maxTokens">최대 토큰</label>
+              <div class="field-label-row">
+                <label for="maxTokens">최대 토큰</label>
+                <span class="range-note">64~2048</span>
+              </div>
               <input id="maxTokens" name="max_tokens" type="number" min="64" max="2048" value="512" />
+              <div class="hint">모델 답변 길이 제한입니다. 빠른 테스트는 낮게 둡니다.</div>
             </div>
           </div>
           <details class="advanced-settings">
-            <summary>모델 / 엔드포인트 설정</summary>
+            <summary>모델 / 엔드포인트 설정 - 추천 모델 3개 선택 가능</summary>
             <div class="row">
               <div class="field">
                 <label for="modelId">모델 ID</label>
-                <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" />
+                <select id="modelId" name="model_id">
+                  <option value="Qwen/Qwen3-VL-2B-Instruct" selected>Qwen/Qwen3-VL-2B-Instruct - 기본, 경량 VLM</option>
+                  <option value="Qwen/Qwen3-VL-4B-Instruct-FP8">Qwen/Qwen3-VL-4B-Instruct-FP8 - 4B FP8 후보</option>
+                  <option value="Qwen/Qwen2.5-VL-7B-Instruct-AWQ">Qwen/Qwen2.5-VL-7B-Instruct-AWQ - 7B AWQ 후보</option>
+                </select>
+                <div class="hint">현재 vLLM 컨테이너가 실제로 로드한 모델과 같은 ID를 선택해야 합니다. 모델을 바꾸려면 vLLM 컨테이너도 해당 모델로 다시 시작해야 합니다.</div>
               </div>
               <div class="field">
                 <label for="endpoint">vLLM 엔드포인트</label>

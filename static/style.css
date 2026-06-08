@@ -101,6 +101,7 @@ label {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   box-sizing: border-box;
@@ -142,6 +143,29 @@ button:disabled {
 
 .field {
   margin-bottom: 8px;
+}
+
+.field-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.field-label-row label {
+  margin-bottom: 0;
+}
+
+.range-note {
+  flex: 0 0 auto;
+  border: 1px solid #d9e1ec;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #4b5563;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .row {
