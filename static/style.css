@@ -489,6 +489,20 @@ pre {
   max-height: 42vh;
 }
 
+.answer-box {
+  min-height: 128px;
+  max-height: 42vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--text);
+  padding: 14px;
+  white-space: pre-wrap;
+  word-break: keep-all;
+  line-height: 1.65;
+}
+
 details {
   margin-top: 8px;
 }

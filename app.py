@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import socket
 import threading
 import time
@@ -70,7 +71,16 @@ KOREAN_SYSTEM_PROMPT = (
     "너는 영상 관제 PoC의 한국어 분석 도우미다. "
     "모든 답변은 반드시 한국어로만 작성한다. "
     "다른 언어, 번역문, 설명용 영어 문장을 섞지 않는다. "
-    "영상에서 보이는 내용만 근거로 시간 순서대로 간결하게 요약한다."
+    "영상에서 보이는 내용만 근거로 시간 순서대로 간결하게 요약한다. "
+    "같은 문장을 반복하지 않는다."
+)
+DEFAULT_ANALYSIS_PROMPT = (
+    "보이는 장면만 근거로 아래 형식에 맞춰 한국어로 답해줘.\n"
+    "요약: 실제 관찰한 전체 상황을 1문장으로 작성\n"
+    "주요 장면:\n"
+    "- 실제 관찰한 내용을 시간 순서대로 최대 3개 작성\n"
+    "주의: 불확실한 내용 또는 확인 불가 항목 작성\n"
+    "규칙: 위 설명문을 그대로 복사하지 말 것, 번호 매기기 금지, 같은 문장 반복 금지, 전체 6줄 이내"
 )
 KOREAN_RETRY_PROMPT_PREFIX = (
     "이전 응답이 한국어가 아니면 실패로 간주된다. "
@@ -121,6 +131,8 @@ def build_vllm_payload(
         ],
         "max_tokens": max_tokens,
         "temperature": 0,
+        "frequency_penalty": 0.4,
+        "presence_penalty": 0.1,
     }
 
 
@@ -133,6 +145,28 @@ def extract_answer(vllm_response: dict[str, Any]) -> str:
     if isinstance(content, str):
         return content
     return json.dumps(content, ensure_ascii=False, indent=2)
+
+
+def normalize_answer_text(answer: str) -> str:
+    """
+    화면에 표시할 VLM 응답에서 반복 줄만 제거합니다.
+
+    모델이 같은 문장을 번호만 바꿔 반복하는 경우가 있어, 번호 접두사를 제외한 본문이 같은 줄은 1번만 남깁니다.
+    새로운 사실을 만들지 않고 중복 줄만 제거합니다.
+    """
+    cleaned_lines = []
+    seen_normalized = set()
+    for raw_line in answer.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        normalized = re.sub(r"^\s*[-*\d.)]+\s*", "", line)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if normalized in seen_normalized:
+            continue
+        seen_normalized.add(normalized)
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines) if cleaned_lines else answer.strip()
 
 
 def call_vllm(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -152,6 +186,8 @@ def build_text_only_payload(model_id: str, prompt: str, max_tokens: int) -> dict
         ],
         "max_tokens": max_tokens,
         "temperature": 0,
+        "frequency_penalty": 0.4,
+        "presence_penalty": 0.1,
     }
 
 
@@ -385,7 +421,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             message=f"{worker['worker_id']} vLLM endpoint로 영상 분석 요청을 보내는 중입니다.",
         )
         raw_response = call_vllm(worker_endpoint, payload)
-        answer = extract_answer(raw_response)
+        answer = normalize_answer_text(extract_answer(raw_response))
         korean_check = assess_korean_response(answer)
         korean_retry_used = False
         korean_repair_used = False
@@ -404,7 +440,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
                 strict_korean=True,
             )
             raw_response = call_vllm(worker_endpoint, retry_payload)
-            answer = extract_answer(raw_response)
+            answer = normalize_answer_text(extract_answer(raw_response))
             korean_check = assess_korean_response(answer)
             korean_retry_used = True
         if KOREAN_RETRY_ENABLED and not korean_check["ok"] and answer.strip():
@@ -420,7 +456,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
                 int(settings["max_tokens"]),
             )
             repair_response = call_vllm(worker_endpoint, repair_payload)
-            repair_answer = extract_answer(repair_response)
+            repair_answer = normalize_answer_text(extract_answer(repair_response))
             repair_check = assess_korean_response(repair_answer)
             if repair_answer.strip():
                 raw_response = {
@@ -723,7 +759,7 @@ async def api_create_video_job(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로만 요약해줘. 다른 언어는 사용하지 말고, 보이는 내용만 근거로 작성해줘."),
+    prompt: str = Form(default=DEFAULT_ANALYSIS_PROMPT),
 ) -> JSONResponse:
     """영상 분석 작업을 생성하고 즉시 job 상태를 반환합니다."""
     job = await create_video_job_from_form(video_file, video_url, frame_count, max_tokens, model_id, endpoint, prompt)
@@ -742,7 +778,7 @@ async def api_create_video_batch(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로만 요약해줘. 다른 언어는 사용하지 말고, 보이는 내용만 근거로 작성해줘."),
+    prompt: str = Form(default=DEFAULT_ANALYSIS_PROMPT),
 ) -> JSONResponse:
     """최대 3개 영상 분석 작업을 생성하고 하나의 batch 상태로 반환합니다."""
     batch = await create_video_batch_from_form(
@@ -818,7 +854,7 @@ async def api_analyze_video_compat(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로만 요약해줘. 다른 언어는 사용하지 말고, 보이는 내용만 근거로 작성해줘."),
+    prompt: str = Form(default=DEFAULT_ANALYSIS_PROMPT),
 ) -> JSONResponse:
     """
     기존 클라이언트 호환용 API입니다.

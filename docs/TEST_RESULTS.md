@@ -22,6 +22,7 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 | 2026-06-08 11:05:13 | `20260608-110513_b9bea3` | 3 | 100% | 616.7ms | 3/3 | synthetic mp4 3개, `worker-1`, frame `1`, max token `128` |
 | 2026-06-08 11:07:39 | `20260608-110739_3907e4` | 1 | 100% | 확인됨 | 1/1 | `korean_fallback_rate=1.0` 필드 검증 |
 | 2026-06-08 13:28:50 | `batch_1780892930_663d0c47` | 3 | 100% | job별 `723ms`, `567ms`, `567ms` | 0/3 | `/api/jobs/video-batch` synthetic mp4 3개, `worker-1`, frame `1`, max token `64` |
+| 2026-06-08 15:32:27 | `batch_1780900347_0b8eb3f3` | 1 | 100% | 확인됨 | 0/1 | 구조화 프롬프트와 중복 줄 제거 후 synthetic mp4 1개 분석. `요약`, `주요 장면` 형식 응답 확인 |
 
 ## 주요 관찰
 
@@ -39,6 +40,7 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 | 2026-06-08 | 1365x768 | 영상 입력 슬롯 3개를 표시하고, 입력된 슬롯만 batch job으로 생성하는 화면을 확인했습니다. | `tmp/layout_batch_inputs.png`, Edge headless screenshot |
 | 2026-06-08 | 1365x768 | 흰색/옅은 회색 구획, 파란 액센트, 간결한 상태 카드 중심의 금융 앱형 UI 톤을 적용했습니다. | `tmp/layout_toss_like.png`, Edge headless screenshot |
 | 2026-06-08 | 1365x768 | 기본 화면의 긴 설명, 상세 런타임 도구, 평가 리포트, 상세 통계를 접힘 영역으로 이동해 입력/결과/최근 작업 중심으로 단순화했습니다. | `tmp/layout_simplified.png`, Edge headless screenshot |
+| 2026-06-08 | 1365x768 | VLM 응답 표시를 어두운 로그 박스에서 밝은 결과 카드로 변경했습니다. | `tmp/layout_answer_format.png`, Edge headless screenshot |
 | 2026-06-08 | API | 분석 form에 `action="/api/jobs/video-batch"`, `method="post"`, `enctype="multipart/form-data"`를 명시해 기본 form 제출이 `POST /`로 가며 405를 내는 경로를 차단했습니다. | `curl -i -X POST /api/jobs/video-batch`, `curl -i -X POST /` |
 
 검증 범위는 테스트 화면의 배치 확인입니다. 실제 영상 분석 품질이나 vLLM 처리 성능 검증은 이 항목에 포함하지 않았습니다.
@@ -54,6 +56,7 @@ git diff --check
 & 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_batch_inputs.png http://127.0.0.1:8080
 & 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_toss_like.png http://127.0.0.1:8080
 & 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_simplified.png http://127.0.0.1:8080
+& 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_answer_format.png http://127.0.0.1:8080
 Invoke-RestMethod -Uri http://localhost:8000/v1/models -TimeoutSec 10
 .\.venv\Scripts\python.exe evaluation_runner.py --synthetic-count 3 --frame-count 1 --max-tokens 128 --timeout-sec 180
 ```
