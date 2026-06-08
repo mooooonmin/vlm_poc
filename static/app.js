@@ -3,6 +3,8 @@ let activeBatchId = null;
 let jobPollTimer = null;
 let batchPollTimer = null;
 
+// 서버가 반환하는 vLLM lifecycle 값을 화면 표시용 한국어 문구로 바꿉니다.
+// 실제 판정은 backend의 /api/vllm-status에서 하고, 프론트엔드는 표시만 담당합니다.
 const lifecycleLabels = {
   not_started: "vLLM 미시작",
   starting: "vLLM 시작 중",
@@ -26,6 +28,8 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
+// 상단 런타임 카드에 필요한 상태를 한 번에 갱신합니다.
+// GPU, vLLM, time-slicing, 앱 설정, worker readiness를 병렬 조회해 화면의 현재 환경 상태를 맞춥니다.
 async function refreshRuntime() {
   const [gpu, vllm, timeslicing, config, workers] = await Promise.all([
     fetchJson("/api/gpu-status"),
@@ -53,6 +57,8 @@ async function startVllm() {
   await waitForVllmReady();
 }
 
+// vLLM 컨테이너 시작은 Docker image pull, 모델 다운로드, 모델 로딩 때문에 오래 걸릴 수 있습니다.
+// 그래서 버튼 클릭 요청은 바로 반환하고, 화면은 3초마다 /api/vllm-status를 polling해 API ready 여부를 확인합니다.
 async function waitForVllmReady() {
   const maxAttempts = 120;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -115,6 +121,8 @@ async function collectTimeslicingLogs() {
     `Time-slicing 로그 수집 완료: ${data.overall_status || "상태 없음"}`;
 }
 
+// time-slicing 검증은 로컬 Windows에서 실제 적용이 아니라 "검증 가능 여부와 실패 원인 기록"이 목적입니다.
+// backend가 만든 checks 배열을 표로 보여주고, 원본 JSON은 runtime 상세 영역에 남깁니다.
 function renderTimeslicingResult(data) {
   const checks = data.checks || [];
   $("timeslicingResult").innerHTML = `
@@ -146,6 +154,8 @@ function renderTimeslicingResult(data) {
   `;
 }
 
+// 분석 요청 제출 흐름입니다.
+// 화면에는 영상 입력 슬롯이 3개 있지만, backend는 실제 입력된 슬롯만 job으로 만들고 하나의 batch_id로 묶습니다.
 async function submitAnalysis(event) {
   event.preventDefault();
   const button = $("analyzeBtn");
@@ -176,6 +186,8 @@ async function submitAnalysis(event) {
   }
 }
 
+// batch polling은 "한 번에 여러 영상"을 요청했을 때 전체 진행률을 갱신하는 루프입니다.
+// batch 안의 각 job은 독립적으로 queued/running/done/failed가 되므로, 선택된 job 결과와 batch 요약을 함께 갱신합니다.
 function startBatchPolling(batchId) {
   if (!batchId) {
     return;
@@ -207,6 +219,8 @@ function startBatchPolling(batchId) {
   }, 2500);
 }
 
+// 단일 job polling은 사용자가 최근 작업 목록에서 특정 job만 선택했을 때 사용합니다.
+// batch polling과 동시에 돌면 화면 상태가 엇갈릴 수 있어 batch polling 시작 시 job polling을 중지합니다.
 function startJobPolling(jobId) {
   if (jobPollTimer) {
     clearInterval(jobPollTimer);
@@ -226,6 +240,8 @@ function startJobPolling(jobId) {
   }, 2500);
 }
 
+// 최근 job 목록과 통계를 갱신합니다.
+// 사용자는 여기서 성공/실패 수, 평균 처리시간, worker별 처리 건수, 실패 원인을 빠르게 볼 수 있습니다.
 async function refreshJobs() {
   const [data, stats] = await Promise.all([
     fetchJson("/api/jobs?limit=10"),
@@ -241,6 +257,8 @@ async function refreshJobs() {
   `).join("") || "<div class=\"hint\">최근 작업이 없습니다.</div>";
 }
 
+// evaluation runner가 만든 summary.json 목록을 화면에 표시합니다.
+// 실제 테스트 결과의 상세 근거는 docs/TEST_RESULTS.md와 logs/evaluation/{run_id} 파일을 기준으로 관리합니다.
 async function refreshEvaluations() {
   const data = await fetchJson("/api/evaluations?limit=10");
   renderEvaluations(data.evaluations || []);
@@ -302,6 +320,8 @@ function renderJobStats(stats) {
   `;
 }
 
+// 최근 작업 목록에서 job 하나를 클릭했을 때 호출됩니다.
+// 진행 중인 job이면 polling을 다시 시작해 결과 화면이 자동으로 갱신되게 합니다.
 async function selectJob(jobId) {
   activeJobId = jobId;
   const job = await fetchJson(`/api/jobs/${encodeURIComponent(jobId)}`);
@@ -320,6 +340,8 @@ async function selectBatchJob(jobId) {
   }
 }
 
+// batch 요약 렌더링입니다.
+// 여러 영상 요청에서는 사용자가 어떤 영상 job의 결과를 보고 있는지 알아야 하므로, 선택된 job을 active로 표시합니다.
 function renderBatch(batch) {
   const counts = batch.status_counts || {};
   $("batchPanel").innerHTML = `
@@ -340,6 +362,8 @@ function renderBatch(batch) {
   `;
 }
 
+// 단일 job 결과 렌더링입니다.
+// 프레임 미리보기, 정리된 VLM 응답, job.json 로그 경로만 화면에 보여주고 원본 vLLM JSON은 파일에만 둡니다.
 function renderJob(job) {
   const sampledCount = job.video_info?.sampled_frame_count ?? 0;
   const workerText = job.worker_id ? ` / worker: ${job.worker_id}` : "";
@@ -362,6 +386,8 @@ function renderJob(job) {
   $("jobLogPath").textContent = job.job_dir ? `로그: ${job.job_dir}\\job.json` : "";
 }
 
+// job.json에는 반복 테스트용 점검 항목이 저장됩니다.
+// 현재 화면에서는 직접 표시하지 않지만, 디버깅 화면이나 향후 상세 패널에서 사용할 수 있도록 문자열 포맷을 유지합니다.
 function formatLoopChecks(job) {
   const checks = job.loop_checks || {};
   const korean = job.korean_check || {};
@@ -381,6 +407,8 @@ function formatLoopChecks(job) {
   ].join("\n");
 }
 
+// job 단계별 처리시간을 사람이 읽기 쉬운 한 줄 문자열로 만듭니다.
+// 전체 시간과 vLLM 요청 시간을 분리하면 지연 원인이 프레임 추출인지 모델 응답인지 구분할 수 있습니다.
 function formatJobTiming(job) {
   const parts = [];
   if (job.duration_ms != null) {
@@ -403,6 +431,8 @@ function clearResult() {
   $("frames").innerHTML = "";
 }
 
+// 서버 응답값을 HTML 문자열에 넣기 전에 escape합니다.
+// 영상 URL, 모델 응답, 로그 문자열은 외부 입력일 수 있으므로 XSS 위험을 줄이기 위해 반드시 거칩니다.
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")

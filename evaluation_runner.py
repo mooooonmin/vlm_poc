@@ -78,6 +78,12 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_samples(args: argparse.Namespace) -> list[dict[str, Any]]:
+    """
+    평가 대상 샘플 목록을 만듭니다.
+
+    실제 파일/URL 샘플은 --samples JSON에서 읽고, 빠른 파이프라인 검증은 synthetic mp4를 생성해 사용합니다.
+    synthetic 샘플은 모델 품질 평가가 아니라 "job 생성, 프레임 추출, vLLM 호출, 리포트 저장" 흐름 확인용입니다.
+    """
     samples: list[dict[str, Any]] = []
     if args.samples:
         samples.extend(json.loads(Path(args.samples).read_text(encoding="utf-8")))
@@ -87,6 +93,12 @@ def load_samples(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 
 def create_synthetic_samples(count: int) -> list[dict[str, Any]]:
+    """
+    자동 생성 테스트 영상을 샘플 목록으로 반환합니다.
+
+    생성된 파일은 tmp/evaluation_samples에 저장됩니다.
+    실제 교통/관제 영상이 아니므로, 이 결과로 모델의 실제 영상 이해 성능을 판단하면 안 됩니다.
+    """
     video_dir = TMP_DIR / "evaluation_samples"
     video_dir.mkdir(parents=True, exist_ok=True)
     samples = []
@@ -118,6 +130,12 @@ def write_synthetic_video(video_path: Path, sample_index: int) -> None:
 
 
 def run_sample(sample: dict[str, Any], frame_count: int, max_tokens: int, timeout_sec: int) -> dict[str, Any]:
+    """
+    샘플 1개를 실제 분석 job으로 넣고 완료될 때까지 기다립니다.
+
+    FastAPI 화면과 같은 job_store/dispatcher 경로를 사용합니다.
+    즉, 평가 러너는 별도 분석 로직을 다시 구현하지 않고, 화면에서 쓰는 분석 파이프라인을 그대로 검증합니다.
+    """
     source = build_source(sample)
     job = create_job(
         TMP_DIR,
@@ -132,6 +150,9 @@ def run_sample(sample: dict[str, Any], frame_count: int, max_tokens: int, timeou
     )
     enqueue_analysis_job(job["job_id"])
     deadline = time.time() + timeout_sec
+
+    # dispatcher가 worker에 배정하고 vLLM 응답을 받을 때까지 job.json 상태를 주기적으로 확인합니다.
+    # timeout은 vLLM 로딩 지연이나 worker 대기 상태가 무한히 이어지는 것을 막기 위한 안전장치입니다.
     while time.time() < deadline:
         current = get_job(job["job_id"])
         if current and current.get("status") in {"done", "failed"}:
@@ -149,6 +170,12 @@ def run_sample(sample: dict[str, Any], frame_count: int, max_tokens: int, timeou
 
 
 def build_source(sample: dict[str, Any]) -> dict[str, Any]:
+    """
+    평가 샘플 입력을 job_store가 이해하는 source 형식으로 변환합니다.
+
+    file 샘플은 이미 로컬에 있는 파일이므로 upload source처럼 처리하고,
+    url 샘플은 분석 job 안에서 video_utils.download_video가 내려받도록 URL만 저장합니다.
+    """
     sample_type = sample.get("type")
     if sample_type == "file":
         path = Path(sample["path"]).resolve()
@@ -159,6 +186,12 @@ def build_source(sample: dict[str, Any]) -> dict[str, Any]:
 
 
 def summarize_job(sample: dict[str, Any], job: dict[str, Any]) -> dict[str, Any]:
+    """
+    job.json 전체 중 평가 리포트에 필요한 핵심 값만 추립니다.
+
+    원본 raw 응답이나 프레임 data URL은 리포트를 불필요하게 크게 만들 수 있어 제외합니다.
+    대신 상태, 처리시간, worker, 한국어 보정 여부, 실패 단계, 답변 일부를 남깁니다.
+    """
     return {
         "sample": sample,
         "job_id": job.get("job_id"),
@@ -187,6 +220,17 @@ def build_report(
     results: list[dict[str, Any]],
     log_dir: Path,
 ) -> dict[str, Any]:
+    """
+    평가 run 전체 요약 JSON을 만듭니다.
+
+    success_rate 계산식:
+    - success_count / sample_count
+    - 샘플이 0개이면 0으로 둡니다.
+
+    korean_fallback_rate 계산식:
+    - korean_fallback_count / sample_count
+    - fallback은 모델이 끝까지 한국어 지시를 따르지 않아 앱이 한국어 경고문으로 감싼 경우입니다.
+    """
     success_count = sum(1 for result in results if result.get("status") == "done")
     failed_count = sum(1 for result in results if result.get("status") == "failed")
     timeout_count = sum(1 for result in results if result.get("status") == "timeout")
@@ -211,6 +255,11 @@ def build_report(
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    """
+    사람이 빠르게 읽을 수 있는 summary.md를 생성합니다.
+
+    JSON은 상세 분석용이고, Markdown은 commit/문서 검토 때 성공률과 주요 처리시간을 빠르게 확인하기 위한 요약입니다.
+    """
     lines = [
         "# Evaluation Summary",
         "",
@@ -237,6 +286,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 
 def now_text() -> str:
+    """리포트와 콘솔 출력에 사용할 현재 시각 문자열을 반환합니다."""
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 

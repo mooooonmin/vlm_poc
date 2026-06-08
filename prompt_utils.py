@@ -141,7 +141,7 @@ def classify_question_type(user_request: str) -> str:
     if re.search(r"(몇\s*대|몇\s*개|몇\s*명|몇명|수량|개수|대수)", text):
         return "count"
 
-    # 사건/위험 판단은 hallucination 위험이 큰 유형입니다.
+    # 사건/위험 판단은 모델이 실제로 보이지 않는 사고를 만들어낼 위험이 큰 유형입니다.
     # 충돌, 파손, 급정지 같은 직접 근거가 없으면 단정하지 않는 규격을 적용합니다.
     if re.search(r"(사고|충돌|위험|위반|문제|고장|정체|역주행|급정거|급정지)", text):
         return "incident"

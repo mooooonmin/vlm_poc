@@ -344,6 +344,12 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         korean_retry_used = False
         korean_repair_used = False
         korean_fallback_used = False
+
+        # 한국어 응답 보정 흐름입니다.
+        # 1차 vLLM 응답이 한국어 기준을 통과하면 그대로 저장합니다.
+        # 기준을 통과하지 못하면 같은 이미지 프레임과 질문으로 한국어 강제 프롬프트를 붙여 1회 재요청합니다.
+        # 재요청도 실패하면 "영상 재분석"이 아니라 "이미 받은 텍스트 응답을 한국어로 정리"하는 텍스트-only 요청을 보냅니다.
+        # 마지막까지 실패하면 사용자가 실패 원인을 볼 수 있도록 한국어 경고문과 원문 응답을 함께 표시합니다.
         if KOREAN_RETRY_ENABLED and not korean_check["ok"]:
             update_job(
                 job_id,
@@ -401,6 +407,9 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             "3_gpu_snapshot": "done",
             "4_worker_assignment": "done",
         }
+
+        # 화면에는 정리된 answer만 보여주고, 원본 vLLM JSON은 job.json의 raw 필드에 저장합니다.
+        # 이렇게 해야 화면은 단순하게 유지하면서도, 품질 문제가 생겼을 때 원본 응답을 파일에서 추적할 수 있습니다.
         update_job(
             job_id,
             status="done",
@@ -550,6 +559,9 @@ def summarize_batch(batch_id: str) -> dict[str, Any]:
 
     total = len(jobs)
     finished = status_counts["done"] + status_counts["failed"]
+
+    # batch 상태는 "모든 job이 끝났는지"와 "실패가 섞였는지"를 기준으로 계산합니다.
+    # 개별 job은 성공/실패가 분리되어 있으므로, batch는 화면에서 전체 진행률을 보여주는 묶음 상태입니다.
     if total == 0:
         overall_status = "missing"
     elif status_counts["failed"] > 0 and finished == total:
@@ -582,6 +594,8 @@ async def create_video_batch_from_form(
     prompt: str,
 ) -> dict[str, Any]:
     """최대 3개 영상 입력을 각각 독립 job으로 만들고 하나의 batch_id로 묶습니다."""
+    # 빈 슬롯은 무시합니다.
+    # 화면은 최대 3개 입력 칸을 항상 보여주지만, 사용자가 실제로 파일 또는 URL을 넣은 슬롯만 job으로 생성합니다.
     active_items = [(video_file, video_url) for video_file, video_url in items if _has_video_input(video_file, video_url)]
     if not active_items:
         raise HTTPException(status_code=400, detail="최소 1개 이상의 영상 파일 또는 영상 URL이 필요합니다.")
@@ -591,6 +605,9 @@ async def create_video_batch_from_form(
     batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:8]}"
     created_jobs = []
     batch_size = len(active_items)
+
+    # 각 영상은 서로 독립된 job_id를 가집니다.
+    # batch_id는 화면에서 여러 job을 한 묶음으로 polling하고 비교하기 위한 그룹 ID입니다.
     for index, (video_file, video_url) in enumerate(active_items, start=1):
         job = await create_video_job_from_form(
             video_file,
@@ -611,6 +628,8 @@ async def create_video_batch_from_form(
     return summary
 
 
+# 화면과 런타임 상태 API입니다.
+# GPU/vLLM/worker/time-slicing 상태는 분석 요청 전에 환경이 준비됐는지 확인하는 용도입니다.
 @app.get("/")
 def index() -> FileResponse:
     """분리된 HTML 파일을 반환합니다."""
@@ -671,6 +690,8 @@ def api_stop_vllm() -> dict[str, Any]:
     return stop_vllm_container()
 
 
+# 영상 분석 job 생성 API입니다.
+# `/api/jobs/video-batch`가 현재 화면의 기본 경로이고, `/api/jobs/video`는 단일 영상 요청용입니다.
 @app.post("/api/jobs/video")
 async def api_create_video_job(
     video_file: UploadFile | None = File(default=None),
@@ -716,6 +737,8 @@ async def api_create_video_batch(
     return JSONResponse(batch)
 
 
+# 분석 결과 조회 API입니다.
+# 화면은 job_id/batch_id를 받아 polling하면서 queued -> running -> done/failed 변화를 갱신합니다.
 @app.get("/api/jobs")
 def api_list_jobs(limit: int = 20) -> dict[str, Any]:
     """최근 영상 분석 작업 목록을 반환합니다."""
@@ -766,6 +789,8 @@ def api_get_job(job_id: str) -> dict[str, Any]:
     return job
 
 
+# 오래된 클라이언트 호환 API입니다.
+# 새 화면은 job 기반 비동기 흐름을 사용하지만, 기존 `/api/analyze-video` 호출이 바로 깨지지 않도록 남겨 둡니다.
 @app.post("/api/analyze-video")
 async def api_analyze_video_compat(
     video_file: UploadFile | None = File(default=None),
