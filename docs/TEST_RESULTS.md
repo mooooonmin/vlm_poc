@@ -30,6 +30,7 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 | 2026-06-08 16:32:04 | `batch_1780903924_4fcb41d4` | 1 | 100% | `865ms` | 0/1 | 프롬프트 관련 코드를 `prompt_utils.py`로 분리한 뒤 synthetic 시간 질문 회귀 검증. `답변: 약 1.50초` 확인 |
 | 2026-06-08 16:38:07 | `batch_1780903087_ce0b08f6` | 1 | 100% | 확인됨 | 0/1 | 영상 종류 질문 전용 지시 적용. synthetic 샘플의 `무슨 영상` 질문에서 사건 단정 없이 `확인 불가` 응답 확인 |
 | 2026-06-08 16:49:01 | 코드 주석 보강 | - | - | - | - | `app.py`, `static/app.js`, `evaluation_runner.py`, `prompt_utils.py` 주석 보강 후 `py_compile`, `node --check`, API 상태 응답 확인 |
+| 2026-06-08 16:55:57 | 임시파일 정리 버튼 | - | - | - | - | `POST /api/tmp/cleanup?dry_run=true`로 완료 job 36개, 프레임 101개, 예상 21,572,897 bytes 정리 대상 확인. 화면 버튼 스크린샷 `tmp/layout_cleanup_button.png` 생성 |
 
 ## 주요 관찰
 

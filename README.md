@@ -70,6 +70,7 @@ http://127.0.0.1:8080
 | `GET` | `/api/jobs/{job_id}` | 분석 상태, 추출 프레임, 결과, 에러 조회 |
 | `GET` | `/api/jobs` | 최근 분석 job 목록 조회 |
 | `GET` | `/api/jobs/stats` | 최근 job 성공/실패/처리시간/worker별 요약 조회 |
+| `POST` | `/api/tmp/cleanup` | 완료/실패 job의 임시 영상, 프레임, job 로그 정리. `dry_run=true`로 삭제 예정만 확인 가능 |
 | `GET` | `/api/evaluations` | `logs/evaluation/.../summary.json` 기반 최근 평가 리포트 조회 |
 | `POST` | `/api/analyze-video` | 기존 호환용 API. 내부적으로 job을 생성하고 `job_id` 반환 |
 | `GET` | `/api/timeslicing` | K8s time-slicing 초안과 주의사항 확인 |
@@ -99,6 +100,7 @@ http://127.0.0.1:8080
 - 각 분석 요청은 `job_id`를 받고, `tmp/jobs/{job_id}/job.json`에 상태와 결과를 저장합니다.
 - 원본 vLLM 응답 JSON은 화면에 표시하지 않고 `tmp/jobs/{job_id}/job.json`의 `raw` 필드에 저장합니다.
 - 내부 프롬프트는 사용자 분석 요청을 `time`, `video_type`, `object_presence`, `count`, `incident`, `location`, `summary`, `general` 유형으로 분류한 뒤, 해당 유형의 출력 규격과 공통 안전 규칙만 vLLM 요청에 합성합니다.
+- 분석에 사용한 업로드/다운로드 영상은 `tmp/jobs/{job_id}/`, 추출 프레임은 `tmp/frames/`에 저장됩니다. 반복 테스트 후 화면의 `임시파일 정리` 버튼을 누르면 완료/실패 job의 영상, 프레임, job 로그를 삭제합니다.
 - batch job에는 `batch_id`, `batch_index`, `batch_size`가 함께 기록됩니다.
 - job 결과에는 `worker_id`, `worker_endpoint`, `queued_at`, `started_at`, `finished_at`이 기록됩니다.
 - 새 job 결과에는 `frame_extract_duration_ms`, `vllm_duration_ms`, `duration_ms`, `failure_stage`, `failure_reason`도 기록됩니다.

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 import uuid
@@ -201,6 +202,86 @@ def get_job_stats(limit: int = 50) -> dict[str, Any]:
     }
 
 
+def cleanup_finished_jobs(frame_dir: Path, dry_run: bool = False) -> dict[str, Any]:
+    """
+    완료/실패한 job의 임시 파일을 정리합니다.
+
+    삭제 대상:
+    - status가 `done` 또는 `failed`인 job의 `tmp/jobs/{job_id}` 폴더
+    - 해당 job.json의 frames 목록이 참조하는 `tmp/frames/*.jpg` 파일
+    - 메모리에 남아 있는 해당 job 상태
+
+    삭제하지 않는 대상:
+    - `queued` 또는 `running` 상태 job
+    - job.json에 기록되지 않은 임의의 파일
+    - frame_dir 밖에 있는 경로
+
+    dry_run=True이면 실제 삭제 없이 삭제 예정 개수와 예상 용량만 계산합니다.
+    """
+    frame_root = frame_dir.resolve()
+    with STORE_LOCK:
+        jobs_snapshot = [dict(job) for job in JOBS.values()]
+
+    targets = [job for job in jobs_snapshot if job.get("status") in {"done", "failed"}]
+    skipped = [job for job in jobs_snapshot if job.get("status") in {"queued", "running"}]
+    deleted_job_ids: list[str] = []
+    errors: list[dict[str, str]] = []
+    deleted_frame_files = 0
+    deleted_job_dirs = 0
+    freed_bytes = 0
+
+    for job in targets:
+        job_id = str(job.get("job_id") or "")
+
+        # 프레임 파일은 화면 미리보기용으로 tmp/frames에 따로 저장됩니다.
+        # job.json에 기록된 경로만 지우고, frame_dir 밖 경로는 실수 방지를 위해 건너뜁니다.
+        for frame in job.get("frames") or []:
+            frame_path = Path(str(frame.get("path") or ""))
+            if not _is_within(frame_path, frame_root):
+                continue
+            if not frame_path.exists():
+                continue
+            try:
+                freed_bytes += frame_path.stat().st_size
+                if not dry_run:
+                    frame_path.unlink()
+                deleted_frame_files += 1
+            except OSError as error:
+                errors.append({"job_id": job_id, "path": str(frame_path), "error": str(error)})
+
+        job_dir = Path(str(job.get("job_dir") or ""))
+        if not job_id or job_dir.name != job_id or not job_dir.exists():
+            continue
+        try:
+            freed_bytes += _path_size(job_dir)
+            if not dry_run:
+                shutil.rmtree(job_dir)
+            deleted_job_dirs += 1
+            deleted_job_ids.append(job_id)
+        except OSError as error:
+            errors.append({"job_id": job_id, "path": str(job_dir), "error": str(error)})
+
+    if not dry_run and deleted_job_ids:
+        with STORE_LOCK:
+            for job_id in deleted_job_ids:
+                current = JOBS.get(job_id)
+                if current and current.get("status") in {"done", "failed"}:
+                    JOBS.pop(job_id, None)
+
+    return {
+        "ok": not errors,
+        "dry_run": dry_run,
+        "deleted_job_count": len(deleted_job_ids),
+        "deleted_job_ids": deleted_job_ids,
+        "deleted_frame_file_count": deleted_frame_files,
+        "deleted_job_dir_count": deleted_job_dirs,
+        "skipped_active_job_count": len(skipped),
+        "skipped_active_job_ids": [str(job.get("job_id")) for job in skipped],
+        "freed_bytes": freed_bytes,
+        "errors": errors,
+    }
+
+
 def load_existing_jobs(base_dir: Path) -> None:
     """
     서버 재시작 후에도 이전 job.json을 최근 작업 목록에 다시 표시합니다.
@@ -242,3 +323,26 @@ def _write_job_file(job: dict[str, Any]) -> None:
     job_dir = Path(job["job_dir"])
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "job.json").write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    """path가 parent 폴더 안에 있는지 확인합니다."""
+    try:
+        path.resolve().relative_to(parent)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _path_size(path: Path) -> int:
+    """파일 또는 폴더의 전체 크기를 byte 단위로 계산합니다."""
+    if path.is_file():
+        return path.stat().st_size
+    total = 0
+    for child in path.rglob("*"):
+        if child.is_file():
+            try:
+                total += child.stat().st_size
+            except OSError:
+                continue
+    return total

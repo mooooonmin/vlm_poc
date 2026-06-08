@@ -264,6 +264,36 @@ async function refreshEvaluations() {
   renderEvaluations(data.evaluations || []);
 }
 
+// 완료/실패한 job의 업로드/다운로드 영상, 추출 프레임, job.json을 정리합니다.
+// backend는 queued/running job을 건너뛰므로 분석 중인 작업을 실수로 삭제하지 않습니다.
+async function cleanupTmpFiles() {
+  const confirmed = window.confirm("완료/실패한 작업의 임시 영상, 프레임, job 로그를 정리할까요? 진행 중인 작업은 삭제하지 않습니다.");
+  if (!confirmed) {
+    return;
+  }
+
+  $("jobStatus").textContent = "임시파일 정리 중";
+  try {
+    if (batchPollTimer) {
+      clearInterval(batchPollTimer);
+      batchPollTimer = null;
+    }
+    if (jobPollTimer) {
+      clearInterval(jobPollTimer);
+      jobPollTimer = null;
+    }
+    const result = await fetchJson("/api/tmp/cleanup", { method: "POST" });
+    activeJobId = null;
+    activeBatchId = null;
+    clearResult();
+    await refreshJobs();
+    $("jobStatus").textContent =
+      `임시파일 정리 완료 · job ${result.deleted_job_count}개 · 프레임 ${result.deleted_frame_file_count}개 · ${(Number(result.freed_bytes || 0) / 1024 / 1024).toFixed(1)}MB`;
+  } catch (error) {
+    $("jobStatus").textContent = `임시파일 정리 실패: ${String(error)}`;
+  }
+}
+
 function renderEvaluations(evaluations) {
   $("evaluationList").innerHTML = evaluations.map((evaluation) => {
     const fallbackRate = evaluation.korean_fallback_rate != null

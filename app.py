@@ -27,7 +27,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from job_store import create_job, get_job, get_job_stats, list_batch_jobs, list_jobs, load_existing_jobs, update_job
+from job_store import cleanup_finished_jobs, create_job, get_job, get_job_stats, list_batch_jobs, list_jobs, load_existing_jobs, update_job
 from prompt_utils import (
     DEFAULT_USER_REQUEST,
     KOREAN_REPAIR_PROMPT,
@@ -758,6 +758,17 @@ def api_get_batch(batch_id: str) -> dict[str, Any]:
 def api_job_stats(limit: int = 50) -> dict[str, Any]:
     """최근 영상 분석 작업의 성공/실패/처리시간/worker별 요약을 반환합니다."""
     return get_job_stats(limit=limit)
+
+
+@app.post("/api/tmp/cleanup")
+def api_cleanup_tmp_files(dry_run: bool = False) -> dict[str, Any]:
+    """
+    완료/실패한 분석 job의 임시 파일을 정리합니다.
+
+    queued/running job은 삭제하지 않습니다.
+    dry_run=true를 붙이면 실제 삭제 없이 삭제 예정 개수와 용량만 계산합니다.
+    """
+    return cleanup_finished_jobs(FRAME_DIR, dry_run=dry_run)
 
 
 @app.get("/api/evaluations")
