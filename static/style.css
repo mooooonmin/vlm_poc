@@ -298,6 +298,39 @@ details {
   gap: 8px;
 }
 
+.evaluation-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.evaluation-item {
+  border: 1px solid #d9e1ec;
+  border-radius: 6px;
+  background: #fff;
+  padding: 10px;
+}
+
+.evaluation-item strong,
+.evaluation-item span {
+  display: block;
+}
+
+.evaluation-item span {
+  margin-top: 3px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.stat-grid.compact {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.stat-grid.compact strong {
+  font-size: 15px;
+}
+
 .job-item {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

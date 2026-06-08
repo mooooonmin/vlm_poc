@@ -230,6 +230,38 @@ async function refreshJobs() {
   `).join("") || "<div class=\"hint\">최근 작업이 없습니다.</div>";
 }
 
+async function refreshEvaluations() {
+  const data = await fetchJson("/api/evaluations?limit=10");
+  renderEvaluations(data.evaluations || []);
+}
+
+function renderEvaluations(evaluations) {
+  $("evaluationList").innerHTML = evaluations.map((evaluation) => {
+    const fallbackRate = evaluation.sample_count
+      ? `${Math.round((Number(evaluation.korean_fallback_count || 0) / Number(evaluation.sample_count)) * 1000) / 10}%`
+      : "-";
+    return `
+      <div class="evaluation-item">
+        <div>
+          <strong>${escapeHtml(evaluation.run_id || "-")}</strong>
+          <span>${escapeHtml(evaluation.started_at || "-")} - ${escapeHtml(evaluation.finished_at || "-")}</span>
+        </div>
+        <div class="stat-grid compact">
+          <div><strong>${Number(evaluation.sample_count || 0)}</strong><span>샘플</span></div>
+          <div><strong>${Number(evaluation.success_count || 0)}</strong><span>성공</span></div>
+          <div><strong>${evaluation.success_rate == null ? "-" : `${Math.round(Number(evaluation.success_rate) * 1000) / 10}%`}</strong><span>성공률</span></div>
+          <div><strong>${evaluation.average_duration_ms == null ? "-" : `${evaluation.average_duration_ms}ms`}</strong><span>평균</span></div>
+          <div><strong>${fallbackRate}</strong><span>fallback</span></div>
+        </div>
+        <details>
+          <summary>리포트 경로와 원본 JSON</summary>
+          <pre>${escapeHtml(JSON.stringify(evaluation, null, 2))}</pre>
+        </details>
+      </div>
+    `;
+  }).join("") || "<div class=\"hint\">저장된 평가 리포트가 없습니다.</div>";
+}
+
 function renderJobStats(stats) {
   const status = stats.status_counts || {};
   const workers = stats.worker_counts || {};
@@ -342,3 +374,4 @@ function escapeHtml(value) {
 $("analyzeForm").addEventListener("submit", submitAnalysis);
 refreshRuntime();
 refreshJobs();
+refreshEvaluations();

@@ -649,6 +649,26 @@ def api_job_stats(limit: int = 50) -> dict[str, Any]:
     return get_job_stats(limit=limit)
 
 
+@app.get("/api/evaluations")
+def api_evaluations(limit: int = 10) -> dict[str, Any]:
+    """최근 evaluation run 리포트 목록을 반환합니다."""
+    evaluations_root = BASE_DIR / "logs" / "evaluation"
+    if not evaluations_root.exists():
+        return {"evaluations": []}
+    reports = []
+    for summary_path in sorted(evaluations_root.glob("*/summary.json"), reverse=True):
+        try:
+            report = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        report["summary_json_path"] = str(summary_path)
+        report["summary_md_path"] = str(summary_path.with_name("summary.md"))
+        reports.append(report)
+        if len(reports) >= limit:
+            break
+    return {"evaluations": reports}
+
+
 @app.get("/api/jobs/{job_id}")
 def api_get_job(job_id: str) -> dict[str, Any]:
     """단일 영상 분석 작업 상태와 결과를 반환합니다."""
