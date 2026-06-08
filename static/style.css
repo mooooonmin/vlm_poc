@@ -183,14 +183,30 @@ button:disabled {
   color: #067647;
 }
 
+.check-status.ready {
+  background: #dcfae6;
+  color: #067647;
+}
+
+.check-status.busy {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
 .check-status.failed {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.check-status.error {
   background: #fee4e2;
   color: #b42318;
 }
 
 .check-status.partial,
 .check-status.not_available,
-.check-status.skipped {
+.check-status.skipped,
+.check-status.unknown {
   background: #fef0c7;
   color: #93370d;
 }

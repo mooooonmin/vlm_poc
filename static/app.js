@@ -25,11 +25,12 @@ async function fetchJson(url, options = {}) {
 }
 
 async function refreshRuntime() {
-  const [gpu, vllm, timeslicing, config] = await Promise.all([
+  const [gpu, vllm, timeslicing, config, workers] = await Promise.all([
     fetchJson("/api/gpu-status"),
     fetchJson("/api/vllm-status"),
     fetchJson("/api/timeslicing"),
     fetchJson("/api/config"),
+    fetchJson("/api/workers/refresh", { method: "POST" }),
   ]);
 
   const lifecycle = lifecycleLabels[vllm.lifecycle_stage] || vllm.lifecycle_stage || "상태 불명";
@@ -44,8 +45,10 @@ async function refreshRuntime() {
     `GPU_MEMORY_UTILIZATION: ${config.gpu_memory_utilization}`,
     `HF_TOKEN: ${config.hf_token_configured ? "설정됨" : "미설정"}`,
     `분석 처리: ${config.processing_mode}`,
+    `vLLM worker: ${(workers.workers || []).length}개`,
   ].map((text) => `<span>${escapeHtml(text)}</span>`).join("");
-  $("runtimeDetail").textContent = JSON.stringify({ gpu, vllm, timeslicing, config }, null, 2);
+  renderWorkers(workers.workers || []);
+  $("runtimeDetail").textContent = JSON.stringify({ gpu, vllm, timeslicing, config, workers }, null, 2);
 }
 
 async function startVllm() {
@@ -82,6 +85,50 @@ async function loadVllmLogs() {
   const data = await fetchJson("/api/vllm/logs?lines=160");
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
   $("runtimeStatus").textContent = "vLLM 컨테이너 로그 tail을 불러왔습니다.";
+}
+
+async function refreshWorkers() {
+  const data = await fetchJson("/api/workers/refresh", { method: "POST" });
+  renderWorkers(data.workers || []);
+  $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
+  $("runtimeStatus").textContent = "vLLM worker 상태를 새로고침했습니다.";
+}
+
+function renderWorkers(workers) {
+  $("workerPanel").innerHTML = `
+    <div class="check-header">
+      <strong>vLLM Worker</strong>
+      <span>영상 job은 ready 상태 worker에 배정됩니다.</span>
+    </div>
+    <div class="check-table-wrap">
+      <table class="check-table">
+        <thead>
+          <tr>
+            <th>상태</th>
+            <th>Worker</th>
+            <th>Endpoint</th>
+            <th>처리 중 job</th>
+            <th>마지막 오류</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${workers.map((worker) => `
+            <tr>
+              <td><span class="check-status ${escapeHtml(worker.status || "unknown")}">${escapeHtml(worker.status || "-")}</span></td>
+              <td>${escapeHtml(worker.worker_id || "-")}</td>
+              <td><code>${escapeHtml(worker.endpoint || "-")}</code></td>
+              <td>${escapeHtml(worker.active_job_id || "-")}</td>
+              <td>${escapeHtml(worker.last_error || "-")}</td>
+            </tr>
+          `).join("") || `
+            <tr>
+              <td colspan="5">등록된 worker가 없습니다.</td>
+            </tr>
+          `}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 async function collectTimeslicingLogs() {
@@ -191,7 +238,8 @@ async function selectJob(jobId) {
 
 function renderJob(job) {
   const sampledCount = job.video_info?.sampled_frame_count ?? 0;
-  $("jobStatus").textContent = `작업 ${job.job_id} / 상태: ${job.status} / ${job.message || ""}`;
+  const workerText = job.worker_id ? ` / worker: ${job.worker_id}` : "";
+  $("jobStatus").textContent = `작업 ${job.job_id} / 상태: ${job.status}${workerText} / ${job.message || ""}`;
   $("analyzeStatus").textContent = `현재 작업: ${job.job_id} (${job.status})`;
   $("frames").innerHTML = (job.frames || []).map((frame) => `
     <div class="frame-card">
@@ -200,11 +248,11 @@ function renderJob(job) {
     </div>
   `).join("");
   if (job.status === "done") {
-    $("answer").textContent = job.answer || "(응답 텍스트 없음)";
+    $("answer").textContent = `${job.worker_id ? `[${job.worker_id}] ${job.worker_endpoint || ""}\n\n` : ""}${job.answer || "(응답 텍스트 없음)"}`;
   } else if (job.status === "failed") {
     $("answer").textContent = job.error?.message || job.message || "분석 실패";
   } else {
-    $("answer").textContent = `분석 진행 중입니다. 추출된 프레임: ${sampledCount}개`;
+    $("answer").textContent = `분석 진행 중입니다. 추출된 프레임: ${sampledCount}개${job.worker_id ? `\n배정 worker: ${job.worker_id}` : ""}`;
   }
   $("rawJson").textContent = JSON.stringify(job, null, 2);
 }

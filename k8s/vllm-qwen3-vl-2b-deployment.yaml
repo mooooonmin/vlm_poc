@@ -11,7 +11,10 @@ metadata:
   labels:
     app: vllm-qwen3-vl-2b
 spec:
-  replicas: 1
+  # time-slicing 검증용 예시는 vLLM Pod 2개를 띄웁니다.
+  # NVIDIA device-plugin의 replicas: 2 설정과 맞춰 "GPU slot 2개처럼 스케줄링되는지" 확인하기 위한 값입니다.
+  # 실제 VRAM은 두 Pod가 공유하므로, 두 vLLM 모델이 동시에 올라가면 RTX 4070 Ti급 12GB에서는 OOM이 날 수 있습니다.
+  replicas: 2
   selector:
     matchLabels:
       app: vllm-qwen3-vl-2b

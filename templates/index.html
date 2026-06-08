@@ -20,10 +20,12 @@
         <button type="button" onclick="startVllm()">vLLM 시작 / GPU 점유</button>
         <button type="button" class="danger" onclick="stopVllm()">vLLM 종료 / GPU 해제</button>
         <button type="button" class="secondary" onclick="loadVllmLogs()">vLLM 로그</button>
+        <button type="button" class="secondary" onclick="refreshWorkers()">Worker 상태 새로고침</button>
         <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그 수집</button>
       </div>
       <div id="runtimeStatus" class="status">아직 확인하지 않았습니다.</div>
       <div id="runtimeBadges" class="badges"></div>
+      <div id="workerPanel" class="check-panel"></div>
       <div id="timeslicingResult" class="check-panel"></div>
       <details open>
         <summary>CUDA / vLLM / Time-slicing 상세</summary>
@@ -62,6 +64,7 @@
             <div class="field">
               <label for="endpoint">vLLM 엔드포인트</label>
               <input id="endpoint" name="endpoint" value="http://localhost:8000/v1/chat/completions" />
+              <div class="hint">호환용 입력값입니다. 실제 분산 처리는 서버의 VLLM_WORKERS 설정에 등록된 worker endpoint를 사용합니다.</div>
             </div>
           </div>
           <div class="field">

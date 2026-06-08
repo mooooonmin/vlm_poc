@@ -15,6 +15,7 @@ import os
 import queue
 import socket
 import threading
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,7 @@ from video_utils import (
     sample_video_frames,
     download_video,
 )
+from worker_registry import acquire_ready_worker, list_workers, refresh_workers, release_worker
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -69,11 +71,13 @@ app.mount("/frames", StaticFiles(directory=str(FRAME_DIR)), name="frames")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
-# 분석 작업은 큐에 넣고 한 개 worker가 순차 처리합니다.
-# 단일 GPU에서 여러 VLM 요청을 동시에 보내면 VRAM 부족과 지연 원인을 구분하기 어려워지므로 PoC 기본값은 순차 처리입니다.
+# 분석 작업은 큐에 넣고 dispatcher가 사용 가능한 vLLM worker에 배정합니다.
+# 여기서 worker는 Python thread가 아니라 "요청을 받을 수 있는 vLLM API 서버 1개"입니다.
+# 로컬 RTX 4070 Ti 테스트에서는 기본 worker가 1개라 기존처럼 순차 처리됩니다.
+# Kubernetes time-slicing 테스트에서는 VLLM_WORKERS 환경변수에 여러 endpoint를 넣어 여러 vLLM Pod/Service로 분산할 수 있습니다.
 ANALYSIS_QUEUE: queue.Queue[str] = queue.Queue()
-WORKER_STARTED = False
-WORKER_LOCK = threading.Lock()
+DISPATCHER_STARTED = False
+DISPATCHER_LOCK = threading.Lock()
 
 
 def build_vllm_payload(
@@ -131,32 +135,74 @@ def validate_analysis_inputs(
 
 
 def enqueue_analysis_job(job_id: str) -> None:
-    """분석 job을 큐에 넣고 worker가 없으면 시작합니다."""
-    global WORKER_STARTED
+    """분석 job을 큐에 넣고 dispatcher가 없으면 시작합니다."""
+    global DISPATCHER_STARTED
     ANALYSIS_QUEUE.put(job_id)
-    with WORKER_LOCK:
-        if not WORKER_STARTED:
-            worker = threading.Thread(target=analysis_worker, daemon=True)
-            worker.start()
-            WORKER_STARTED = True
+    with DISPATCHER_LOCK:
+        if not DISPATCHER_STARTED:
+            dispatcher = threading.Thread(target=analysis_dispatcher, daemon=True)
+            dispatcher.start()
+            DISPATCHER_STARTED = True
 
 
-def analysis_worker() -> None:
-    """큐에 쌓인 영상 분석 작업을 하나씩 처리합니다."""
+def analysis_dispatcher() -> None:
+    """
+    큐에 쌓인 job을 사용 가능한 vLLM worker에 배정합니다.
+
+    worker가 1개이면 순차 처리이고, worker가 여러 개이면 각 worker가 비는 즉시 다음 job을 배정합니다.
+    time-slicing은 Kubernetes에서 GPU slot을 늘려 보이게 하는 설정일 뿐이므로,
+    실제 요청 분산은 이 dispatcher가 어떤 vLLM endpoint로 보낼지 결정해야 동작합니다.
+    """
     while True:
         job_id = ANALYSIS_QUEUE.get()
         try:
-            process_analysis_job(job_id)
+            dispatch_analysis_job(job_id)
         finally:
             ANALYSIS_QUEUE.task_done()
 
 
-def process_analysis_job(job_id: str) -> None:
+def dispatch_analysis_job(job_id: str) -> None:
+    """ready worker가 생길 때까지 기다린 뒤 job 처리 thread를 시작합니다."""
+    while True:
+        refresh_workers()
+        worker = acquire_ready_worker(job_id)
+        if worker:
+            thread = threading.Thread(target=run_job_on_worker, args=(job_id, worker), daemon=True)
+            thread.start()
+            return
+
+        update_job(
+            job_id,
+            status="queued",
+            message="사용 가능한 vLLM worker를 기다리는 중입니다. vLLM이 아직 로딩 중이거나 모든 worker가 처리 중입니다.",
+            worker_status=list_workers(),
+        )
+        time.sleep(3)
+
+
+def run_job_on_worker(job_id: str, worker: dict[str, Any]) -> None:
+    """배정된 worker에서 job을 처리하고, 끝나면 worker 점유를 해제합니다."""
+    success = False
+    error_message = ""
+    try:
+        process_analysis_job(job_id, worker)
+        finished_job = get_job(job_id)
+        success = bool(finished_job and finished_job.get("status") == "done")
+        if not success:
+            error_message = str((finished_job or {}).get("message", "job이 실패했습니다."))
+    except Exception as error:
+        error_message = str(error)
+        mark_job_failed(job_id, classify_user_error(error), error)
+    finally:
+        release_worker(str(worker["worker_id"]), success=success, error_message=error_message)
+
+
+def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
     """
     단일 영상 분석 job을 처리합니다.
 
     처리 단계:
-    1. vLLM ready 확인
+    1. 배정된 vLLM worker 기록
     2. 업로드 파일 또는 URL 영상 준비
     3. OpenCV로 균등 프레임 추출
     4. 프레임을 base64 data URL로 변환
@@ -168,17 +214,21 @@ def process_analysis_job(job_id: str) -> None:
         return
 
     try:
-        update_job(job_id, status="running", message="vLLM 상태를 확인하는 중입니다.")
-        vllm_status = get_vllm_status()
-        if not vllm_status.get("running"):
-            raise RuntimeError(
-                f"{vllm_status.get('message', 'vLLM 서버가 아직 준비되지 않았습니다.')} "
-                "상단의 vLLM 시작 버튼을 누른 뒤 /v1/models 응답이 확인되면 다시 분석하세요."
-            )
-
         source = job["source"]
         settings = job["settings"]
         job_dir = Path(job["job_dir"])
+        worker_endpoint = str(worker["endpoint"])
+
+        # worker_id/worker_endpoint를 job.json에 남겨야 여러 영상 요청을 테스트할 때
+        # 어떤 vLLM 서버가 어떤 요청을 처리했는지 성공/실패 원인을 추적할 수 있습니다.
+        update_job(
+            job_id,
+            status="running",
+            message=f"{worker['worker_id']}에 배정되어 영상 분석을 시작합니다.",
+            worker_id=worker["worker_id"],
+            worker_endpoint=worker_endpoint,
+            started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
         update_job(job_id, message="영상 입력을 준비하는 중입니다.")
         if source["type"] == "upload":
@@ -222,14 +272,15 @@ def process_analysis_job(job_id: str) -> None:
             int(settings["max_tokens"]),
         )
 
-        update_job(job_id, message="vLLM에 영상 분석 요청을 보내는 중입니다.")
-        raw_response = call_vllm(str(settings["endpoint"]), payload)
+        update_job(job_id, message=f"{worker['worker_id']} vLLM endpoint로 영상 분석 요청을 보내는 중입니다.")
+        raw_response = call_vllm(worker_endpoint, payload)
         update_job(
             job_id,
             status="done",
             message="분석이 완료되었습니다.",
             answer=extract_answer(raw_response),
             raw=raw_response,
+            finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         )
     except requests.HTTPError as error:
         detail = error.response.text if error.response is not None else str(error)
@@ -244,6 +295,7 @@ def mark_job_failed(job_id: str, message: str, error: Exception) -> None:
         job_id,
         status="failed",
         message=message,
+        finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         error={
             "message": message,
             "type": type(error).__name__,
@@ -281,6 +333,8 @@ async def create_video_job_from_form(
         "frame_count": frame_count,
         "max_tokens": max_tokens,
         "model_id": model_id,
+        # 단일 endpoint 입력값은 호환을 위해 저장하지만, 실제 요청은 dispatcher가 배정한 worker_endpoint로 보냅니다.
+        # VLLM_WORKERS가 미설정이면 worker endpoint가 DEFAULT_VLLM_ENDPOINT 1개라 기존 동작과 같습니다.
         "endpoint": endpoint,
         "prompt": prompt,
     }
@@ -291,6 +345,7 @@ async def create_video_job_from_form(
         source = {"type": "url", "url": video_url.strip(), "name": video_url.strip()}
 
     job = create_job(TMP_DIR, source=source, settings=settings)
+    update_job(job["job_id"], queued_at=time.strftime("%Y-%m-%d %H:%M:%S"))
 
     if video_file and video_file.filename:
         saved_path = await save_upload_file(video_file, Path(job["job_dir"]), max_bytes=MAX_UPLOAD_BYTES)
@@ -325,6 +380,18 @@ def api_vllm_status() -> dict[str, Any]:
 def api_vllm_logs(lines: int = 120) -> dict[str, Any]:
     """vLLM 컨테이너 로그 tail을 반환합니다."""
     return get_vllm_logs(lines=lines)
+
+
+@app.get("/api/workers")
+def api_workers() -> dict[str, Any]:
+    """현재 등록된 vLLM worker 목록과 배정 상태를 반환합니다."""
+    return {"workers": list_workers()}
+
+
+@app.post("/api/workers/refresh")
+def api_refresh_workers() -> dict[str, Any]:
+    """각 vLLM worker의 `/v1/models` 응답을 확인해 ready/error 상태를 갱신합니다."""
+    return {"workers": refresh_workers()}
 
 
 @app.get("/api/timeslicing")
@@ -413,7 +480,8 @@ def api_config() -> dict[str, Any]:
         "max_sample_frames": MAX_SAMPLE_FRAMES,
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_video_duration_sec": MAX_VIDEO_DURATION_SEC,
-        "processing_mode": "sequential",
+        "processing_mode": "single-worker" if len(list_workers()) == 1 else "multi-worker-dispatch",
+        "workers": list_workers(),
     }
 
 
