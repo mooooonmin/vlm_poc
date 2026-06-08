@@ -768,7 +768,7 @@ def api_cleanup_tmp_files(dry_run: bool = False) -> dict[str, Any]:
     queued/running job은 삭제하지 않습니다.
     dry_run=true를 붙이면 실제 삭제 없이 삭제 예정 개수와 용량만 계산합니다.
     """
-    return cleanup_finished_jobs(FRAME_DIR, dry_run=dry_run)
+    return cleanup_finished_jobs(TMP_DIR, FRAME_DIR, dry_run=dry_run)
 
 
 @app.get("/api/evaluations")

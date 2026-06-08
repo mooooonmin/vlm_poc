@@ -287,8 +287,11 @@ async function cleanupTmpFiles() {
     activeBatchId = null;
     clearResult();
     await refreshJobs();
+    const extraCount = Number(result.deleted_orphan_job_dir_count || 0)
+      + Number(result.deleted_extra_dir_count || 0)
+      + Number(result.deleted_extra_file_count || 0);
     $("jobStatus").textContent =
-      `임시파일 정리 완료 · job ${result.deleted_job_count}개 · 프레임 ${result.deleted_frame_file_count}개 · ${(Number(result.freed_bytes || 0) / 1024 / 1024).toFixed(1)}MB`;
+      `임시파일 정리 완료 · job ${result.deleted_job_count}개 · 프레임 ${result.deleted_frame_file_count}개 · 기타 ${extraCount}개 · ${(Number(result.freed_bytes || 0) / 1024 / 1024).toFixed(1)}MB`;
   } catch (error) {
     $("jobStatus").textContent = `임시파일 정리 실패: ${String(error)}`;
   }

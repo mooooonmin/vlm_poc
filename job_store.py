@@ -202,33 +202,55 @@ def get_job_stats(limit: int = 50) -> dict[str, Any]:
     }
 
 
-def cleanup_finished_jobs(frame_dir: Path, dry_run: bool = False) -> dict[str, Any]:
+def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, dry_run: bool = False) -> dict[str, Any]:
     """
-    완료/실패한 job의 임시 파일을 정리합니다.
+    완료/실패한 job과 테스트용 임시 파일을 정리합니다.
 
     삭제 대상:
     - status가 `done` 또는 `failed`인 job의 `tmp/jobs/{job_id}` 폴더
-    - 해당 job.json의 frames 목록이 참조하는 `tmp/frames/*.jpg` 파일
+    - `queued`/`running` job이 참조하지 않는 `tmp/frames/*` 파일
+    - 메모리에는 없지만 `tmp/jobs`에 남아 있는 고아 job 폴더
+    - `tmp/evaluation_samples`, `tmp/validation` 테스트 샘플 폴더
+    - `tmp/layout_*.png` 화면 검증 스크린샷
     - 메모리에 남아 있는 해당 job 상태
 
     삭제하지 않는 대상:
     - `queued` 또는 `running` 상태 job
-    - job.json에 기록되지 않은 임의의 파일
-    - frame_dir 밖에 있는 경로
+    - 진행 중 job의 job_dir
+    - 진행 중 job의 frames 목록이 참조하는 프레임 파일
+    - tmp_dir/frame_dir 밖에 있는 경로
 
     dry_run=True이면 실제 삭제 없이 삭제 예정 개수와 예상 용량만 계산합니다.
     """
+    tmp_root = tmp_dir.resolve()
     frame_root = frame_dir.resolve()
+    jobs_root = tmp_root / "jobs"
     with STORE_LOCK:
         jobs_snapshot = [dict(job) for job in JOBS.values()]
 
     targets = [job for job in jobs_snapshot if job.get("status") in {"done", "failed"}]
     skipped = [job for job in jobs_snapshot if job.get("status") in {"queued", "running"}]
+    active_job_dirs = {
+        Path(str(job.get("job_dir"))).resolve()
+        for job in skipped
+        if job.get("job_dir")
+    }
+    active_frame_paths = {
+        Path(str(frame.get("path"))).resolve()
+        for job in skipped
+        for frame in (job.get("frames") or [])
+        if frame.get("path")
+    }
     deleted_job_ids: list[str] = []
     errors: list[dict[str, str]] = []
     deleted_frame_files = 0
     deleted_job_dirs = 0
+    deleted_orphan_job_dirs = 0
+    deleted_extra_dirs = 0
+    deleted_extra_files = 0
     freed_bytes = 0
+    planned_frame_paths: set[Path] = set()
+    planned_job_dirs: set[Path] = set()
 
     for job in targets:
         job_id = str(job.get("job_id") or "")
@@ -242,24 +264,74 @@ def cleanup_finished_jobs(frame_dir: Path, dry_run: bool = False) -> dict[str, A
             if not frame_path.exists():
                 continue
             try:
-                freed_bytes += frame_path.stat().st_size
-                if not dry_run:
-                    frame_path.unlink()
+                freed_bytes += _delete_path(frame_path, dry_run)
+                planned_frame_paths.add(frame_path.resolve())
                 deleted_frame_files += 1
             except OSError as error:
                 errors.append({"job_id": job_id, "path": str(frame_path), "error": str(error)})
 
         job_dir = Path(str(job.get("job_dir") or ""))
-        if not job_id or job_dir.name != job_id or not job_dir.exists():
+        if not job_id or job_dir.name != job_id or not job_dir.exists() or not _is_within(job_dir, jobs_root):
             continue
         try:
-            freed_bytes += _path_size(job_dir)
-            if not dry_run:
-                shutil.rmtree(job_dir)
+            freed_bytes += _delete_path(job_dir, dry_run)
+            planned_job_dirs.add(job_dir.resolve())
             deleted_job_dirs += 1
             deleted_job_ids.append(job_id)
         except OSError as error:
             errors.append({"job_id": job_id, "path": str(job_dir), "error": str(error)})
+
+    # 메모리에 남아 있지 않은 이전 테스트 job 폴더도 tmp/jobs 아래에 있으면 정리합니다.
+    # 단, 현재 queued/running job 폴더는 건너뜁니다.
+    if jobs_root.exists():
+        for job_dir in jobs_root.iterdir():
+            if not job_dir.is_dir():
+                continue
+            resolved_job_dir = job_dir.resolve()
+            if resolved_job_dir in active_job_dirs:
+                continue
+            if resolved_job_dir in planned_job_dirs:
+                continue
+            try:
+                freed_bytes += _delete_path(job_dir, dry_run)
+                deleted_orphan_job_dirs += 1
+            except OSError as error:
+                errors.append({"job_id": "", "path": str(job_dir), "error": str(error)})
+
+    # tmp/frames는 공용 미리보기 폴더라 job.json에 연결되지 않은 고아 jpg가 남을 수 있습니다.
+    # 진행 중 job이 참조하는 프레임만 보호하고 나머지는 모두 삭제합니다.
+    if frame_root.exists():
+        for frame_path in frame_root.iterdir():
+            if not frame_path.is_file():
+                continue
+            if frame_path.resolve() in active_frame_paths:
+                continue
+            if frame_path.resolve() in planned_frame_paths:
+                continue
+            try:
+                freed_bytes += _delete_path(frame_path, dry_run)
+                deleted_frame_files += 1
+            except OSError as error:
+                errors.append({"job_id": "", "path": str(frame_path), "error": str(error)})
+
+    # evaluation_runner와 수동 검증에서 만든 샘플 영상 폴더도 tmp 산출물이므로 버튼 정리 대상에 포함합니다.
+    for extra_dir_name in ("evaluation_samples", "validation"):
+        extra_dir = tmp_root / extra_dir_name
+        if extra_dir.exists() and _is_within(extra_dir, tmp_root):
+            try:
+                freed_bytes += _delete_path(extra_dir, dry_run)
+                deleted_extra_dirs += 1
+            except OSError as error:
+                errors.append({"job_id": "", "path": str(extra_dir), "error": str(error)})
+
+    # UI 검증용 headless screenshot도 tmp 산출물입니다.
+    for extra_file in tmp_root.glob("layout_*.png"):
+        if extra_file.is_file() and _is_within(extra_file, tmp_root):
+            try:
+                freed_bytes += _delete_path(extra_file, dry_run)
+                deleted_extra_files += 1
+            except OSError as error:
+                errors.append({"job_id": "", "path": str(extra_file), "error": str(error)})
 
     if not dry_run and deleted_job_ids:
         with STORE_LOCK:
@@ -275,6 +347,9 @@ def cleanup_finished_jobs(frame_dir: Path, dry_run: bool = False) -> dict[str, A
         "deleted_job_ids": deleted_job_ids,
         "deleted_frame_file_count": deleted_frame_files,
         "deleted_job_dir_count": deleted_job_dirs,
+        "deleted_orphan_job_dir_count": deleted_orphan_job_dirs,
+        "deleted_extra_dir_count": deleted_extra_dirs,
+        "deleted_extra_file_count": deleted_extra_files,
         "skipped_active_job_count": len(skipped),
         "skipped_active_job_ids": [str(job.get("job_id")) for job in skipped],
         "freed_bytes": freed_bytes,
@@ -346,3 +421,14 @@ def _path_size(path: Path) -> int:
             except OSError:
                 continue
     return total
+
+
+def _delete_path(path: Path, dry_run: bool) -> int:
+    """파일/폴더 크기를 계산하고 dry_run이 아니면 실제로 삭제합니다."""
+    size = _path_size(path)
+    if not dry_run:
+        if path.is_dir():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    return size
