@@ -1,5 +1,7 @@
 let activeJobId = null;
+let activeBatchId = null;
 let jobPollTimer = null;
+let batchPollTimer = null;
 
 const lifecycleLabels = {
   not_started: "vLLM 미시작",
@@ -157,23 +159,61 @@ async function submitAnalysis(event) {
   event.preventDefault();
   const button = $("analyzeBtn");
   button.disabled = true;
-  $("analyzeStatus").textContent = "영상 분석 작업을 생성하는 중입니다.";
+  $("analyzeStatus").textContent = "영상 분석 batch를 생성하는 중입니다.";
   clearResult();
 
   try {
     const formData = new FormData(event.target);
-    const job = await fetchJson("/api/jobs/video", { method: "POST", body: formData });
-    activeJobId = job.job_id;
-    $("analyzeStatus").textContent = `작업 생성 완료: ${activeJobId}`;
-    renderJob(job);
+    const batch = await fetchJson("/api/jobs/video-batch", { method: "POST", body: formData });
+    activeBatchId = batch.batch_id;
+    activeJobId = batch.jobs?.[0]?.job_id || batch.created_jobs?.[0]?.job_id || null;
+    $("analyzeStatus").textContent = `batch 생성 완료: ${activeBatchId}`;
+    renderBatch(batch);
+    if (activeJobId) {
+      const firstJob = (batch.jobs || batch.created_jobs || []).find((job) => job.job_id === activeJobId);
+      if (firstJob) {
+        renderJob(firstJob);
+      }
+    }
     await refreshJobs();
-    startJobPolling(activeJobId);
+    startBatchPolling(activeBatchId);
   } catch (error) {
-    $("analyzeStatus").textContent = "작업 생성 실패";
+    $("analyzeStatus").textContent = "batch 생성 실패";
     $("answer").textContent = String(error);
   } finally {
     button.disabled = false;
   }
+}
+
+function startBatchPolling(batchId) {
+  if (!batchId) {
+    return;
+  }
+  if (batchPollTimer) {
+    clearInterval(batchPollTimer);
+  }
+  if (jobPollTimer) {
+    clearInterval(jobPollTimer);
+    jobPollTimer = null;
+  }
+  batchPollTimer = setInterval(async () => {
+    try {
+      const batch = await fetchJson(`/api/batches/${encodeURIComponent(batchId)}`);
+      renderBatch(batch);
+      const selectedJob = (batch.jobs || []).find((job) => job.job_id === activeJobId) || batch.jobs?.[0];
+      if (selectedJob) {
+        activeJobId = selectedJob.job_id;
+        renderJob(selectedJob);
+      }
+      await refreshJobs();
+      if (batch.status === "done" || batch.status === "failed") {
+        clearInterval(batchPollTimer);
+        batchPollTimer = null;
+      }
+    } catch (error) {
+      $("jobStatus").textContent = String(error);
+    }
+  }, 2500);
 }
 
 function startJobPolling(jobId) {
@@ -282,6 +322,34 @@ async function selectJob(jobId) {
   await refreshJobs();
 }
 
+async function selectBatchJob(jobId) {
+  await selectJob(jobId);
+  if (activeBatchId) {
+    const batch = await fetchJson(`/api/batches/${encodeURIComponent(activeBatchId)}`);
+    renderBatch(batch);
+  }
+}
+
+function renderBatch(batch) {
+  const counts = batch.status_counts || {};
+  $("batchPanel").innerHTML = `
+    <div class="batch-summary">
+      <strong>Batch ${escapeHtml(batch.batch_id || "-")}</strong>
+      <div>${Number(batch.finished || 0)} / ${Number(batch.total || 0)} 완료 · 상태: ${escapeHtml(batch.status || "-")}</div>
+      <div class="hint">done ${Number(counts.done || 0)} / running ${Number(counts.running || 0)} / queued ${Number(counts.queued || 0)} / failed ${Number(counts.failed || 0)}</div>
+    </div>
+    <div class="batch-jobs">
+      ${(batch.jobs || []).map((job) => `
+        <button type="button" class="batch-job ${job.job_id === activeJobId ? "active" : ""}" onclick="selectBatchJob('${job.job_id}')">
+          <strong>${escapeHtml(job.batch_index || "-")}. ${escapeHtml(job.status || "-")}</strong>
+          <span>${escapeHtml(job.source?.name || job.job_id)}</span>
+          <small>${escapeHtml(job.worker_id ? ` / ${job.worker_id}` : "")}</small>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
 function renderJob(job) {
   const sampledCount = job.video_info?.sampled_frame_count ?? 0;
   const workerText = job.worker_id ? ` / worker: ${job.worker_id}` : "";
@@ -339,6 +407,7 @@ function formatJobTiming(job) {
 
 function clearResult() {
   $("jobStatus").textContent = "작업을 준비 중입니다.";
+  $("batchPanel").innerHTML = "";
   $("answer").textContent = "";
   $("rawJson").textContent = "";
   $("frames").innerHTML = "";

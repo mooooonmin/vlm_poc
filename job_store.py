@@ -26,7 +26,14 @@ def now_text() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def create_job(base_dir: Path, source: dict[str, Any], settings: dict[str, Any]) -> dict[str, Any]:
+def create_job(
+    base_dir: Path,
+    source: dict[str, Any],
+    settings: dict[str, Any],
+    batch_id: str | None = None,
+    batch_index: int | None = None,
+    batch_size: int | None = None,
+) -> dict[str, Any]:
     """
     새 분석 작업을 만들고 `queued` 상태로 저장합니다.
 
@@ -40,6 +47,9 @@ def create_job(base_dir: Path, source: dict[str, Any], settings: dict[str, Any])
 
     job = {
         "job_id": job_id,
+        "batch_id": batch_id,
+        "batch_index": batch_index,
+        "batch_size": batch_size,
         "status": "queued",
         "message": "분석 대기 중입니다.",
         "created_at": now_text(),
@@ -111,6 +121,13 @@ def list_jobs(limit: int = 20) -> list[dict[str, Any]]:
     with STORE_LOCK:
         jobs = sorted(JOBS.values(), key=lambda item: item.get("created_at", ""), reverse=True)
         return [dict(job) for job in jobs[:limit]]
+
+
+def list_batch_jobs(batch_id: str) -> list[dict[str, Any]]:
+    """같은 batch_id로 묶인 작업을 입력 순서 기준으로 반환합니다."""
+    with STORE_LOCK:
+        jobs = [dict(job) for job in JOBS.values() if job.get("batch_id") == batch_id]
+    return sorted(jobs, key=lambda item: int(item.get("batch_index") or 0))
 
 
 def get_job_stats(limit: int = 50) -> dict[str, Any]:

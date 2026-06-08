@@ -21,6 +21,7 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 | 2026-06-08 11:03:08 | `20260608-110308_332d8f` | 1 | 100% | 확인됨 | 확인됨 | evaluation runner 최초 synthetic 1개 검증 |
 | 2026-06-08 11:05:13 | `20260608-110513_b9bea3` | 3 | 100% | 616.7ms | 3/3 | synthetic mp4 3개, `worker-1`, frame `1`, max token `128` |
 | 2026-06-08 11:07:39 | `20260608-110739_3907e4` | 1 | 100% | 확인됨 | 1/1 | `korean_fallback_rate=1.0` 필드 검증 |
+| 2026-06-08 13:28:50 | `batch_1780892930_663d0c47` | 3 | 100% | job별 `723ms`, `567ms`, `567ms` | 0/3 | `/api/jobs/video-batch` synthetic mp4 3개, `worker-1`, frame `1`, max token `64` |
 
 ## 주요 관찰
 
@@ -35,6 +36,7 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 | --- | --- | --- | --- |
 | 2026-06-08 | 1365x768 | 런타임 상세를 접은 상태에서 영상 입력, 분석 결과, 최근 작업을 3열 대시보드로 표시했습니다. 전체 페이지 스크롤 대신 입력/결과/최근 작업 패널 내부 스크롤을 사용합니다. | `tmp/layout_qa_loaded_compact_worker.png`, Edge headless screenshot |
 | 2026-06-08 | 1365x768 | 샘플 프레임 수 `1~12`, 최대 토큰 `64~2048` 범위 표시를 추가하고, 사용 모델을 비활성화 필드로 표시했습니다. | `tmp/layout_model_disabled.png`, Edge headless screenshot |
+| 2026-06-08 | 1365x768 | 영상 입력 슬롯 3개를 표시하고, 입력된 슬롯만 batch job으로 생성하는 화면을 확인했습니다. | `tmp/layout_batch_inputs.png`, Edge headless screenshot |
 
 검증 범위는 테스트 화면의 배치 확인입니다. 실제 영상 분석 품질이나 vLLM 처리 성능 검증은 이 항목에 포함하지 않았습니다.
 
@@ -46,6 +48,7 @@ node --check static\app.js
 git diff --check
 & 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_qa_loaded_compact_worker.png http://127.0.0.1:8080
 & 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_model_disabled.png http://127.0.0.1:8080
+& 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_batch_inputs.png http://127.0.0.1:8080
 Invoke-RestMethod -Uri http://localhost:8000/v1/models -TimeoutSec 10
 .\.venv\Scripts\python.exe evaluation_runner.py --synthetic-count 3 --frame-count 1 --max-tokens 128 --timeout-sec 180
 ```

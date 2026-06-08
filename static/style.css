@@ -152,6 +152,34 @@ button:disabled {
   margin-bottom: 8px;
 }
 
+.batch-inputs {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.video-slot {
+  border: 1px solid #d9e1ec;
+  border-radius: 6px;
+  background: #f9fafb;
+  padding: 8px;
+}
+
+.video-slot strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #111827;
+  font-size: 13px;
+}
+
+.video-slot .field {
+  margin-bottom: 6px;
+}
+
+.video-slot input {
+  background: #fff;
+}
+
 .field-label-row {
   display: flex;
   justify-content: space-between;
@@ -216,6 +244,45 @@ button:disabled {
 
 .check-panel {
   margin-top: 8px;
+}
+
+.batch-panel {
+  display: grid;
+  gap: 7px;
+  margin: 8px 0 10px;
+}
+
+.batch-summary {
+  border: 1px solid #d9e1ec;
+  border-radius: 6px;
+  background: #f9fafb;
+  padding: 8px;
+  font-size: 13px;
+}
+
+.batch-jobs {
+  display: grid;
+  gap: 6px;
+}
+
+.batch-job {
+  width: 100%;
+  border: 1px solid #d9e1ec;
+  border-radius: 6px;
+  background: #fff;
+  color: #1f2937;
+  padding: 8px;
+  text-align: left;
+  font-weight: 400;
+}
+
+.batch-job.active {
+  border-color: #155eef;
+  background: #eef4ff;
+}
+
+.batch-job strong {
+  margin-right: 6px;
 }
 
 .worker-strip {

@@ -65,6 +65,8 @@ http://127.0.0.1:8080
 | `GET` | `/api/workers` | 등록된 vLLM worker endpoint와 배정 상태 조회 |
 | `POST` | `/api/workers/refresh` | 각 worker의 `/v1/models` readiness 확인 |
 | `POST` | `/api/jobs/video` | 영상 분석 job 생성. 즉시 `job_id` 반환 |
+| `POST` | `/api/jobs/video-batch` | 영상 1~3개를 각각 job으로 생성하고 `batch_id` 반환 |
+| `GET` | `/api/batches/{batch_id}` | batch 진행률과 영상별 job 상태/결과 조회 |
 | `GET` | `/api/jobs/{job_id}` | 분석 상태, 추출 프레임, 결과, 에러 조회 |
 | `GET` | `/api/jobs` | 최근 분석 job 목록 조회 |
 | `GET` | `/api/jobs/stats` | 최근 job 성공/실패/처리시간/worker별 요약 조회 |
@@ -90,9 +92,11 @@ http://127.0.0.1:8080
 ## 분석 처리 방식
 
 - 기본 처리 방식은 단일 worker 순차 처리입니다.
+- 화면에서는 최대 3개 영상을 한 번에 입력할 수 있고, 서버는 입력된 영상마다 독립 job을 생성한 뒤 하나의 `batch_id`로 묶습니다.
 - `VLLM_WORKERS` 환경변수에 여러 vLLM endpoint를 쉼표로 넣으면 dispatcher가 ready 상태 worker에 job을 배정합니다.
 - 단일 RTX 4070 Ti에서 여러 VLM 요청을 동시에 보내면 VRAM 부족과 지연 원인을 구분하기 어려우므로 로컬 기본값은 worker 1개입니다.
 - 각 분석 요청은 `job_id`를 받고, `tmp/jobs/{job_id}/job.json`에 상태와 결과를 저장합니다.
+- batch job에는 `batch_id`, `batch_index`, `batch_size`가 함께 기록됩니다.
 - job 결과에는 `worker_id`, `worker_endpoint`, `queued_at`, `started_at`, `finished_at`이 기록됩니다.
 - 새 job 결과에는 `frame_extract_duration_ms`, `vllm_duration_ms`, `duration_ms`, `failure_stage`, `failure_reason`도 기록됩니다.
 - 반복 테스트 루프는 `loop_checks`에 기록됩니다: `1_korean_response`, `2_real_video_stats`, `3_gpu_snapshot`, `4_worker_assignment`.
@@ -142,6 +146,7 @@ python app.py
 | 모델 | `Qwen/Qwen3-VL-2B-Instruct` |
 | vLLM 포트 | `8000` |
 | FastAPI 화면 포트 | `8080` |
+| 최대 batch 영상 수 | `3` |
 | 샘플 프레임 수 | 기본 `6`, 화면 선택 범위 `1~12` |
 | 최대 토큰 | 기본 `512`, 화면 선택 범위 `64~2048` |
 | `GPU_MEMORY_UTILIZATION` | `0.85` |

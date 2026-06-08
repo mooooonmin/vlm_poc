@@ -17,6 +17,7 @@ import socket
 import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from job_store import create_job, get_job, get_job_stats, list_jobs, load_existing_jobs, update_job
+from job_store import create_job, get_job, get_job_stats, list_batch_jobs, list_jobs, load_existing_jobs, update_job
 from runtime_utils import (
     DEFAULT_GPU_MEMORY_UTILIZATION,
     DEFAULT_MAX_MODEL_LEN,
@@ -59,6 +60,7 @@ STATIC_DIR = BASE_DIR / "static"
 # PoC 안정성을 위한 기본 제한값입니다.
 # 너무 큰 파일이나 너무 많은 프레임을 허용하면 RTX 4070 Ti 12GB 환경에서 vLLM 요청이 쉽게 실패할 수 있습니다.
 MAX_SAMPLE_FRAMES = 12
+MAX_BATCH_VIDEOS = 3
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 MAX_VIDEO_DURATION_SEC = int(os.environ.get("MAX_VIDEO_DURATION_SEC", "1800"))
 KOREAN_RETRY_ENABLED = os.environ.get("KOREAN_RETRY_ENABLED", "1") != "0"
@@ -533,6 +535,9 @@ async def create_video_job_from_form(
     model_id: str,
     endpoint: str,
     prompt: str,
+    batch_id: str | None = None,
+    batch_index: int | None = None,
+    batch_size: int | None = None,
 ) -> dict[str, Any]:
     """폼 입력을 분석 job으로 만들고 큐에 넣습니다."""
     validate_analysis_inputs(video_file, video_url, frame_count, max_tokens)
@@ -552,7 +557,14 @@ async def create_video_job_from_form(
     else:
         source = {"type": "url", "url": video_url.strip(), "name": video_url.strip()}
 
-    job = create_job(TMP_DIR, source=source, settings=settings)
+    job = create_job(
+        TMP_DIR,
+        source=source,
+        settings=settings,
+        batch_id=batch_id,
+        batch_index=batch_index,
+        batch_size=batch_size,
+    )
     update_job(job["job_id"], queued_at=time.strftime("%Y-%m-%d %H:%M:%S"))
 
     if video_file and video_file.filename:
@@ -564,6 +576,83 @@ async def create_video_job_from_form(
 
     enqueue_analysis_job(job["job_id"])
     return get_job(job["job_id"]) or job
+
+
+def _has_video_input(video_file: UploadFile | None, video_url: str) -> bool:
+    """파일 또는 URL 중 하나라도 입력됐는지 확인합니다."""
+    return bool(video_file and video_file.filename) or bool(video_url.strip())
+
+
+def summarize_batch(batch_id: str) -> dict[str, Any]:
+    """batch_id에 속한 job들의 진행률을 화면/API용으로 요약합니다."""
+    jobs = list_batch_jobs(batch_id)
+    status_counts = {"queued": 0, "running": 0, "done": 0, "failed": 0}
+    for job in jobs:
+        status = str(job.get("status", ""))
+        if status in status_counts:
+            status_counts[status] += 1
+
+    total = len(jobs)
+    finished = status_counts["done"] + status_counts["failed"]
+    if total == 0:
+        overall_status = "missing"
+    elif status_counts["failed"] > 0 and finished == total:
+        overall_status = "failed"
+    elif status_counts["failed"] > 0:
+        overall_status = "partial"
+    elif status_counts["done"] == total:
+        overall_status = "done"
+    elif status_counts["running"] > 0:
+        overall_status = "running"
+    else:
+        overall_status = "queued"
+
+    return {
+        "batch_id": batch_id,
+        "status": overall_status,
+        "total": total,
+        "finished": finished,
+        "status_counts": status_counts,
+        "jobs": jobs,
+    }
+
+
+async def create_video_batch_from_form(
+    items: list[tuple[UploadFile | None, str]],
+    frame_count: int,
+    max_tokens: int,
+    model_id: str,
+    endpoint: str,
+    prompt: str,
+) -> dict[str, Any]:
+    """최대 3개 영상 입력을 각각 독립 job으로 만들고 하나의 batch_id로 묶습니다."""
+    active_items = [(video_file, video_url) for video_file, video_url in items if _has_video_input(video_file, video_url)]
+    if not active_items:
+        raise HTTPException(status_code=400, detail="최소 1개 이상의 영상 파일 또는 영상 URL이 필요합니다.")
+    if len(active_items) > MAX_BATCH_VIDEOS:
+        raise HTTPException(status_code=400, detail=f"batch 입력은 최대 {MAX_BATCH_VIDEOS}개까지만 지원합니다.")
+
+    batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:8]}"
+    created_jobs = []
+    batch_size = len(active_items)
+    for index, (video_file, video_url) in enumerate(active_items, start=1):
+        job = await create_video_job_from_form(
+            video_file,
+            video_url,
+            frame_count,
+            max_tokens,
+            model_id,
+            endpoint,
+            prompt,
+            batch_id=batch_id,
+            batch_index=index,
+            batch_size=batch_size,
+        )
+        created_jobs.append(job)
+
+    summary = summarize_batch(batch_id)
+    summary["created_jobs"] = created_jobs
+    return summary
 
 
 @app.get("/")
@@ -641,10 +730,49 @@ async def api_create_video_job(
     return JSONResponse(job)
 
 
+@app.post("/api/jobs/video-batch")
+async def api_create_video_batch(
+    video_file_1: UploadFile | None = File(default=None),
+    video_url_1: str = Form(default=""),
+    video_file_2: UploadFile | None = File(default=None),
+    video_url_2: str = Form(default=""),
+    video_file_3: UploadFile | None = File(default=None),
+    video_url_3: str = Form(default=""),
+    frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
+    max_tokens: int = Form(default=512),
+    model_id: str = Form(default=DEFAULT_MODEL_ID),
+    endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
+    prompt: str = Form(default="이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로만 요약해줘. 다른 언어는 사용하지 말고, 보이는 내용만 근거로 작성해줘."),
+) -> JSONResponse:
+    """최대 3개 영상 분석 작업을 생성하고 하나의 batch 상태로 반환합니다."""
+    batch = await create_video_batch_from_form(
+        [
+            (video_file_1, video_url_1),
+            (video_file_2, video_url_2),
+            (video_file_3, video_url_3),
+        ],
+        frame_count,
+        max_tokens,
+        model_id,
+        endpoint,
+        prompt,
+    )
+    return JSONResponse(batch)
+
+
 @app.get("/api/jobs")
 def api_list_jobs(limit: int = 20) -> dict[str, Any]:
     """최근 영상 분석 작업 목록을 반환합니다."""
     return {"jobs": list_jobs(limit=limit)}
+
+
+@app.get("/api/batches/{batch_id}")
+def api_get_batch(batch_id: str) -> dict[str, Any]:
+    """batch_id로 묶인 최대 3개 영상 job의 진행률과 개별 결과를 반환합니다."""
+    batch = summarize_batch(batch_id)
+    if batch["total"] == 0:
+        raise HTTPException(status_code=404, detail="해당 batch_id를 찾을 수 없습니다.")
+    return batch
 
 
 @app.get("/api/jobs/stats")
@@ -712,6 +840,7 @@ def api_config() -> dict[str, Any]:
         "max_model_len": DEFAULT_MAX_MODEL_LEN,
         "hf_token_configured": bool(os.environ.get("HF_TOKEN")),
         "max_sample_frames": MAX_SAMPLE_FRAMES,
+        "max_batch_videos": MAX_BATCH_VIDEOS,
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_video_duration_sec": MAX_VIDEO_DURATION_SEC,
         "processing_mode": "single-worker" if len(list_workers()) == 1 else "multi-worker-dispatch",
