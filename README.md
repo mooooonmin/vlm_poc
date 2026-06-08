@@ -122,8 +122,13 @@ python app.py
 | 영상 길이 제한 | 기본 `1800초` |
 | 컨테이너 이름 | `vlm-vllm-qwen` |
 | worker 기본값 | `http://localhost:8000/v1/chat/completions` 1개 |
+| `KOREAN_RETRY_ENABLED` | `1` |
+| `KOREAN_MIN_HANGUL` | `5` |
+| `KOREAN_MIN_RATIO` | `0.2` |
 
 RTX 4070 Ti에서 OOM이 발생하면 샘플 프레임 수를 `4`로 낮추고, 환경 변수 `MAX_MODEL_LEN=4096`으로 낮춰 다시 테스트합니다.
+평가 반복에서 한국어 fallback 비율이 높으면 먼저 실제 영상 샘플을 늘려 확인하고, 필요하면 `KOREAN_MIN_HANGUL`, `KOREAN_MIN_RATIO` 기준을 조정합니다.
+synthetic 텍스트 영상처럼 화면의 영문 텍스트만 읽는 샘플은 fallback이 높게 나올 수 있으므로 실제 관제 영상과 구분해서 해석해야 합니다.
 
 ## YouTube URL 주의사항
 

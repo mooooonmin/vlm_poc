@@ -237,7 +237,9 @@ async function refreshEvaluations() {
 
 function renderEvaluations(evaluations) {
   $("evaluationList").innerHTML = evaluations.map((evaluation) => {
-    const fallbackRate = evaluation.sample_count
+    const fallbackRate = evaluation.korean_fallback_rate != null
+      ? `${Math.round(Number(evaluation.korean_fallback_rate) * 1000) / 10}%`
+      : evaluation.sample_count
       ? `${Math.round((Number(evaluation.korean_fallback_count || 0) / Number(evaluation.sample_count)) * 1000) / 10}%`
       : "-";
     return `

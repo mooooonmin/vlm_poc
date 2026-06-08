@@ -62,6 +62,8 @@ MAX_SAMPLE_FRAMES = 12
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 MAX_VIDEO_DURATION_SEC = int(os.environ.get("MAX_VIDEO_DURATION_SEC", "1800"))
 KOREAN_RETRY_ENABLED = os.environ.get("KOREAN_RETRY_ENABLED", "1") != "0"
+KOREAN_MIN_HANGUL = int(os.environ.get("KOREAN_MIN_HANGUL", "5"))
+KOREAN_MIN_RATIO = float(os.environ.get("KOREAN_MIN_RATIO", "0.2"))
 KOREAN_SYSTEM_PROMPT = (
     "너는 영상 관제 PoC의 한국어 분석 도우미다. "
     "모든 답변은 반드시 한국어로만 작성한다. "
@@ -163,10 +165,12 @@ def assess_korean_response(answer: str) -> dict[str, Any]:
     letter_count = sum(1 for char in text if char.isalpha())
     hangul_ratio = round(hangul_count / letter_count, 3) if letter_count else 0
     return {
-        "ok": hangul_count >= 5 and hangul_ratio >= 0.2,
+        "ok": hangul_count >= KOREAN_MIN_HANGUL and hangul_ratio >= KOREAN_MIN_RATIO,
         "hangul_count": hangul_count,
         "letter_count": letter_count,
         "hangul_ratio": hangul_ratio,
+        "min_hangul": KOREAN_MIN_HANGUL,
+        "min_ratio": KOREAN_MIN_RATIO,
     }
 
 
@@ -712,6 +716,9 @@ def api_config() -> dict[str, Any]:
         "max_video_duration_sec": MAX_VIDEO_DURATION_SEC,
         "processing_mode": "single-worker" if len(list_workers()) == 1 else "multi-worker-dispatch",
         "workers": list_workers(),
+        "korean_retry_enabled": KOREAN_RETRY_ENABLED,
+        "korean_min_hangul": KOREAN_MIN_HANGUL,
+        "korean_min_ratio": KOREAN_MIN_RATIO,
     }
 
 

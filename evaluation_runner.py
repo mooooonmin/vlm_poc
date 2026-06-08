@@ -192,6 +192,7 @@ def build_report(
     timeout_count = sum(1 for result in results if result.get("status") == "timeout")
     durations = [result["duration_ms"] for result in results if isinstance(result.get("duration_ms"), (int, float))]
     korean_fallback_count = sum(1 for result in results if result.get("korean_fallback_used"))
+    korean_fallback_rate = round(korean_fallback_count / len(samples), 3) if samples else 0
     return {
         "run_id": run_id,
         "started_at": started_at,
@@ -204,6 +205,7 @@ def build_report(
         "success_rate": round(success_count / len(samples), 3) if samples else 0,
         "average_duration_ms": round(sum(durations) / len(durations), 1) if durations else None,
         "korean_fallback_count": korean_fallback_count,
+        "korean_fallback_rate": korean_fallback_rate,
         "results": results,
     }
 
@@ -217,6 +219,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- success_rate: `{report['success_rate']}`",
         f"- average_duration_ms: `{report['average_duration_ms']}`",
         f"- korean_fallback_count: `{report['korean_fallback_count']}`",
+        f"- korean_fallback_rate: `{report['korean_fallback_rate']}`",
         "",
         "| 상태 | 샘플 | job_id | worker | 전체 ms | vLLM ms | 한국어 |",
         "| --- | --- | --- | --- | ---: | ---: | --- |",
