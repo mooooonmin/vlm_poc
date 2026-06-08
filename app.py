@@ -75,19 +75,99 @@ KOREAN_SYSTEM_PROMPT = (
     "같은 문장을 반복하지 않는다."
 )
 DEFAULT_USER_REQUEST = "이 영상에서 발생한 주요 상황을 시간 순서대로 요약해줘."
-INTERNAL_OUTPUT_FORMAT_PROMPT = (
-    "보이는 장면만 근거로 아래 형식에 맞춰 한국어로 답해줘.\n"
-    "시간 질문이면 첫 줄에 '답변: 약 N초' 또는 '답변: 확인 불가'를 작성\n"
-    "영상 종류 질문이면 첫 줄에 '답변: ○○ 영상으로 보입니다' 또는 '답변: 확인 불가'를 작성\n"
-    "요약: 실제 관찰한 전체 상황을 1문장으로 작성\n"
-    "주요 장면:\n"
-    "- 실제 관찰한 내용을 시간 순서대로 최대 3개 작성\n"
-    "시간 질문 대응: 사용자가 '몇 초'를 묻는 경우 반드시 제공된 샘플 프레임 시간 중 가장 가까운 초를 답할 것\n"
-    "영상 종류 질문 대응: 화면 제목, 자막, 도로/터널/차량/사람/장소 같은 눈에 보이는 단서로만 영상 종류를 분류할 것\n"
-    "주의: 샘플 프레임 사이에서만 추정되는 내용은 '약 N초'라고 쓰고, 확인 불가하면 '확인 불가'라고 작성\n"
-    "규칙: 사고, 충돌, 위반 같은 사건 판단은 직접 보이는 충돌/파손/정차/화재/사람 등 명확한 근거가 있을 때만 작성\n"
-    "규칙: 내부 출력 규격 문장을 답변에 복사하지 말 것, 번호 매기기 금지, 같은 문장 반복 금지, 전체 6줄 이내"
+COMMON_OUTPUT_RULES = (
+    "공통 규칙:\n"
+    "- 샘플 프레임에서 직접 보이는 근거만 사용\n"
+    "- 불확실하면 '확인 불가'라고 작성\n"
+    "- 사고, 충돌, 위반은 명확한 시각 근거가 있을 때만 작성\n"
+    "- 내부 규칙 문장을 답변에 복사하지 말 것\n"
+    "- 같은 문장 반복 금지, 전체 6줄 이내"
 )
+QUESTION_TYPE_PROMPTS = {
+    "time": (
+        "질문 유형: 시간 질문\n"
+        "답변 형식:\n"
+        "답변: 약 N초 또는 답변: 확인 불가\n"
+        "근거: 프레임 #n, N초에서 보이는 내용\n"
+        "주의: N은 샘플 프레임 시간표에 있는 가장 가까운 초를 사용"
+    ),
+    "video_type": (
+        "질문 유형: 영상 종류 질문\n"
+        "답변 형식:\n"
+        "답변: ○○ 영상으로 보입니다 또는 답변: 확인 불가\n"
+        "근거: 화면 제목, 자막, 장소, 사물, 행위 중 직접 보이는 단서\n"
+        "주의: 사고/충돌 영상으로 단정하려면 충돌, 파손, 정차, 화재 등 명확한 장면이 필요"
+    ),
+    "object_presence": (
+        "질문 유형: 객체 존재 질문\n"
+        "답변 형식:\n"
+        "답변: 보임 / 보이지 않음 / 확인 불가\n"
+        "근거: 해당 객체가 보이는 프레임 번호와 초\n"
+        "주의: 일부만 보이면 '부분적으로 보임'이라고 작성"
+    ),
+    "count": (
+        "질문 유형: 수량 질문\n"
+        "답변 형식:\n"
+        "답변: 약 N개 또는 답변: 확인 불가\n"
+        "근거: 가장 잘 보이는 프레임 번호와 초\n"
+        "주의: 샘플 프레임 기준 추정값임을 밝힐 것"
+    ),
+    "incident": (
+        "질문 유형: 사건/위험 판단 질문\n"
+        "답변 형식:\n"
+        "답변: 사고/위험으로 보임 또는 답변: 단정 불가\n"
+        "근거: 충돌, 파손, 급정지, 역주행, 보행자 위험 등 직접 보이는 단서\n"
+        "주의: 단순 정체나 근접 주행만으로 사고라고 단정하지 말 것"
+    ),
+    "location": (
+        "질문 유형: 위치/장소 질문\n"
+        "답변 형식:\n"
+        "답변: ○○로 보입니다 또는 답변: 확인 불가\n"
+        "근거: 도로, 터널, 차선, 표지판, 주변 구조물 등 직접 보이는 단서"
+    ),
+    "summary": (
+        "질문 유형: 요약 질문\n"
+        "답변 형식:\n"
+        "요약: 전체 상황 1문장\n"
+        "주요 장면:\n"
+        "- 시간 순서대로 최대 3개"
+    ),
+    "general": (
+        "질문 유형: 일반 질문\n"
+        "답변 형식:\n"
+        "답변: 질문에 대한 짧은 답\n"
+        "근거: 관련 프레임 번호와 초\n"
+        "주의: 질문에 직접 관련된 내용만 작성"
+    ),
+}
+
+
+def classify_question_type(user_request: str) -> str:
+    """
+    사용자의 분석 요청을 답변 목적별로 분류합니다.
+
+    vLLM에 모든 규칙을 한 번에 보내면 모델이 질문과 상관없는 형식을 섞거나,
+    "몇 초" 질문에 요약을 답하는 것처럼 초점이 흐려질 수 있습니다.
+    그래서 먼저 질문 유형을 좁힌 뒤 해당 유형의 출력 규격만 payload에 넣습니다.
+    """
+    text = user_request.strip()
+    if re.search(r"(몇\s*초|몇초|언제|시간|시점)", text):
+        return "time"
+    if re.search(r"(어떤\s*영상|무슨\s*영상|뭐.*영상|영상.*뭐|영상.*종류|영상.*내용)", text):
+        return "video_type"
+    if re.search(r"(몇\s*대|몇\s*개|몇\s*명|몇명|수량|개수|대수)", text):
+        return "count"
+    if re.search(r"(사고|충돌|위험|위반|문제|고장|정체|역주행|급정거|급정지)", text):
+        return "incident"
+    if re.search(r"(어디|위치|장소|차선|터널|도로|방향)", text):
+        return "location"
+    if re.search(r"(보여|보이나|보이|있어|있나|나와|나오|등장|트럭|차량|자동차|사람|보행자|버스|오토바이|자전거)", text):
+        return "object_presence"
+    if re.search(r"(요약|정리|설명|상황|전체)", text):
+        return "summary"
+    return "general"
+
+
 KOREAN_RETRY_PROMPT_PREFIX = (
     "이전 응답이 한국어가 아니면 실패로 간주된다. "
     "반드시 한국어 문장으로만 답하라. "
@@ -129,29 +209,14 @@ def build_vllm_payload(
         f"- 프레임 #{frame['index']}: {float(frame.get('timestamp_sec') or 0):.2f}초"
         for frame in sampled_frames
     )
-    time_question_instruction = ""
-    if re.search(r"(몇\s*초|몇초|언제|시간|시점)", user_request):
-        time_question_instruction = (
-            "\n\n시간 질문 전용 지시:\n"
-            "- 답변 첫 줄은 반드시 '답변: 약 N초' 또는 '답변: 확인 불가' 형식으로 작성\n"
-            "- N은 샘플 프레임 시간표에 있는 초 값 중 가장 가까운 값을 사용\n"
-            "- 샘플 프레임 사이를 추정한 경우 '약'을 붙일 것"
-        )
-    video_type_instruction = ""
-    if re.search(r"(어떤\s*영상|무슨\s*영상|뭐.*영상|영상.*뭐|영상.*종류|영상.*내용)", user_request):
-        video_type_instruction = (
-            "\n\n영상 종류 질문 전용 지시:\n"
-            "- 답변 첫 줄은 반드시 '답변: ○○ 영상으로 보입니다' 또는 '답변: 확인 불가' 형식으로 작성\n"
-            "- 영상 종류는 샘플 프레임에서 직접 보이는 제목, 자막, 장소, 사물, 행위로만 판단\n"
-            "- 사고/충돌/위반으로 단정하려면 충돌 장면, 파손, 정차 차량, 화재, 사람의 위험 행동 등 명확한 시각 근거가 필요\n"
-            "- 근거가 부족하면 '도로 CCTV 영상으로 보이며, 사고 여부는 확인 불가'처럼 보수적으로 답할 것"
-        )
+    question_type = classify_question_type(user_request)
+    type_prompt = QUESTION_TYPE_PROMPTS.get(question_type, QUESTION_TYPE_PROMPTS["general"])
     composed_prompt = (
         f"사용자 분석 요청:\n{user_request}\n\n"
+        f"질문 유형:\n{question_type}\n\n"
         f"샘플 프레임 시간표:\n{frame_timeline}\n\n"
-        f"내부 출력 규격:\n{INTERNAL_OUTPUT_FORMAT_PROMPT}"
-        f"{time_question_instruction}"
-        f"{video_type_instruction}"
+        f"질문 유형별 출력 규격:\n{type_prompt}\n\n"
+        f"{COMMON_OUTPUT_RULES}"
     )
     final_prompt = f"{KOREAN_RETRY_PROMPT_PREFIX}{composed_prompt}" if strict_korean else composed_prompt
     content: list[dict[str, Any]] = [{"type": "text", "text": final_prompt}]
@@ -196,6 +261,10 @@ def normalize_answer_text(answer: str) -> str:
         "영상 종류 질문 대응:",
         "시간 질문 전용 지시:",
         "영상 종류 질문 전용 지시:",
+        "질문 유형:",
+        "질문 유형별 출력 규격:",
+        "공통 규칙:",
+        "답변 형식:",
         "규칙:",
         "내부 출력 규격:",
         "사용자 분석 요청:",
@@ -209,6 +278,10 @@ def normalize_answer_text(answer: str) -> str:
         if "사용자가 '몇 초'" in line or "사용자가 ‘몇 초’" in line:
             continue
         if "영상 종류 질문" in line:
+            continue
+        if "질문 유형별 출력 규격" in line:
+            continue
+        if "샘플 프레임에서 직접 보이는 근거만 사용" in line:
             continue
         if "사고/충돌/위반" in line:
             continue
@@ -255,11 +328,50 @@ def refine_time_question_answer(answer: str, user_request: str) -> str:
             break
 
     if not selected_time:
+        fallback_match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*초", answer)
+        if fallback_match:
+            selected_time = fallback_match.group(1)
+
+    if not selected_time:
         return answer
 
     first_line = f"답변: 약 {selected_time}초"
-    rest = [line for line in lines if not line.startswith("답변:")]
+    rest = []
+    for line in lines:
+        if line.startswith("답변:"):
+            continue
+        if selected_time in line and not line.startswith("근거:"):
+            rest.append(f"근거: {line}")
+        else:
+            rest.append(line)
     return "\n".join([first_line, *rest])
+
+
+def refine_video_type_answer(answer: str, user_request: str) -> str:
+    """
+    영상 종류 질문에서 모델이 예시 placeholder를 그대로 복사한 경우를 보수적으로 보정합니다.
+
+    `○○ 영상`은 프롬프트의 형식 예시일 뿐 실제 관찰 결과가 아니므로, 그대로 화면에 보여주면
+    사용자가 모델이 영상을 분류했다고 오해할 수 있습니다. 이 경우 새 사실을 만들지 않고 첫 줄만
+    `답변: 확인 불가`로 바꿉니다.
+    """
+    if classify_question_type(user_request) != "video_type":
+        return answer
+    lines = answer.splitlines()
+    if not lines:
+        return answer
+    first_line = lines[0].strip()
+    if "○○" not in first_line:
+        return answer
+    rest = [line for line in lines[1:] if line.strip()]
+    return "\n".join(["답변: 확인 불가", *rest])
+
+
+def refine_question_specific_answer(answer: str, user_request: str) -> str:
+    """질문 유형별로 화면 표시용 답변 형식을 마지막으로 보정합니다."""
+    refined = refine_time_question_answer(answer, user_request)
+    refined = refine_video_type_answer(refined, user_request)
+    return refined
 
 
 def call_vllm(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -522,7 +634,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         )
         raw_response = call_vllm(worker_endpoint, payload)
         answer = normalize_answer_text(extract_answer(raw_response))
-        answer = refine_time_question_answer(answer, str(settings["prompt"]))
+        answer = refine_question_specific_answer(answer, str(settings["prompt"]))
         korean_check = assess_korean_response(answer)
         korean_retry_used = False
         korean_repair_used = False
@@ -542,7 +654,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             )
             raw_response = call_vllm(worker_endpoint, retry_payload)
             answer = normalize_answer_text(extract_answer(raw_response))
-            answer = refine_time_question_answer(answer, str(settings["prompt"]))
+            answer = refine_question_specific_answer(answer, str(settings["prompt"]))
             korean_check = assess_korean_response(answer)
             korean_retry_used = True
         if KOREAN_RETRY_ENABLED and not korean_check["ok"] and answer.strip():
@@ -559,7 +671,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             )
             repair_response = call_vllm(worker_endpoint, repair_payload)
             repair_answer = normalize_answer_text(extract_answer(repair_response))
-            repair_answer = refine_time_question_answer(repair_answer, str(settings["prompt"]))
+            repair_answer = refine_question_specific_answer(repair_answer, str(settings["prompt"]))
             repair_check = assess_korean_response(repair_answer)
             if repair_answer.strip():
                 raw_response = {
