@@ -80,6 +80,7 @@ http://127.0.0.1:8080
 | 파일/폴더 | 역할 |
 | --- | --- |
 | `app.py` | FastAPI 서버, 영상 분석 job dispatcher, API 라우트 |
+| `prompt_utils.py` | 질문 유형 분류, vLLM payload 생성, 한국어 응답 정리/후처리 |
 | `job_store.py` | `job_id` 기반 분석 상태 저장과 `tmp/jobs/{job_id}/job.json` 기록 |
 | `video_utils.py` | 영상 업로드 저장, YouTube/URL 다운로드, OpenCV 프레임 샘플링, base64 이미지 변환 |
 | `runtime_utils.py` | CUDA 상태 확인, Docker 기반 vLLM 시작/종료/로그 확인, time-slicing 검증 로그 수집 |
