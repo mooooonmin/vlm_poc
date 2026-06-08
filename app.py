@@ -74,7 +74,8 @@ KOREAN_SYSTEM_PROMPT = (
     "영상에서 보이는 내용만 근거로 시간 순서대로 간결하게 요약한다. "
     "같은 문장을 반복하지 않는다."
 )
-DEFAULT_ANALYSIS_PROMPT = (
+DEFAULT_USER_REQUEST = "이 영상에서 발생한 주요 상황을 시간 순서대로 요약해줘."
+INTERNAL_OUTPUT_FORMAT_PROMPT = (
     "보이는 장면만 근거로 아래 형식에 맞춰 한국어로 답해줘.\n"
     "요약: 실제 관찰한 전체 상황을 1문장으로 작성\n"
     "주요 장면:\n"
@@ -118,7 +119,12 @@ def build_vllm_payload(
     strict_korean: bool = False,
 ) -> dict[str, Any]:
     """추출 프레임들을 vLLM OpenAI 호환 멀티이미지 요청 형식으로 변환합니다."""
-    final_prompt = f"{KOREAN_RETRY_PROMPT_PREFIX}{prompt}" if strict_korean else prompt
+    user_request = prompt.strip() or DEFAULT_USER_REQUEST
+    composed_prompt = (
+        f"사용자 분석 요청:\n{user_request}\n\n"
+        f"내부 출력 규격:\n{INTERNAL_OUTPUT_FORMAT_PROMPT}"
+    )
+    final_prompt = f"{KOREAN_RETRY_PROMPT_PREFIX}{composed_prompt}" if strict_korean else composed_prompt
     content: list[dict[str, Any]] = [{"type": "text", "text": final_prompt}]
     for data_url in frame_data_urls:
         content.append({"type": "image_url", "image_url": {"url": data_url}})
@@ -165,7 +171,10 @@ def normalize_answer_text(answer: str) -> str:
         if normalized in seen_normalized:
             continue
         seen_normalized.add(normalized)
-        cleaned_lines.append(line)
+        if re.match(r"^\s*\d+[.)]\s+", line):
+            cleaned_lines.append(f"- {normalized}")
+        else:
+            cleaned_lines.append(line)
     return "\n".join(cleaned_lines) if cleaned_lines else answer.strip()
 
 
@@ -759,7 +768,7 @@ async def api_create_video_job(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default=DEFAULT_ANALYSIS_PROMPT),
+    prompt: str = Form(default=DEFAULT_USER_REQUEST),
 ) -> JSONResponse:
     """영상 분석 작업을 생성하고 즉시 job 상태를 반환합니다."""
     job = await create_video_job_from_form(video_file, video_url, frame_count, max_tokens, model_id, endpoint, prompt)
@@ -778,7 +787,7 @@ async def api_create_video_batch(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default=DEFAULT_ANALYSIS_PROMPT),
+    prompt: str = Form(default=DEFAULT_USER_REQUEST),
 ) -> JSONResponse:
     """최대 3개 영상 분석 작업을 생성하고 하나의 batch 상태로 반환합니다."""
     batch = await create_video_batch_from_form(
@@ -854,7 +863,7 @@ async def api_analyze_video_compat(
     max_tokens: int = Form(default=512),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
-    prompt: str = Form(default=DEFAULT_ANALYSIS_PROMPT),
+    prompt: str = Form(default=DEFAULT_USER_REQUEST),
 ) -> JSONResponse:
     """
     기존 클라이언트 호환용 API입니다.
