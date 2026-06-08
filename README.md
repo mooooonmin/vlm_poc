@@ -86,7 +86,6 @@ http://127.0.0.1:8080
 | `templates/index.html`, `static/app.js`, `static/style.css` | 테스트용 웹 화면 |
 | `k8s/` | 추후 Linux/Kubernetes GPU 노드에서 검증할 time-slicing 및 vLLM 배포 manifest 초안 |
 | `docs/TEST_RESULTS.md` | 테스트 결과와 검증 근거 기록 |
-| `docs/NEXT_STEPS.md` | 다음 진행 작업과 검증 순서 |
 
 ## 분석 처리 방식
 
@@ -179,7 +178,6 @@ Kubernetes time-slicing 실검증은 `kubectl` context가 연결된 Linux/K8s GP
 | `k8s/vllm-qwen3-vl-2b-deployment.yaml` | vLLM Qwen3-VL PoC Deployment/Service. time-slicing 검증 예시로 replica `2` |
 | `k8s/kustomization.yaml` | 위 manifest를 한 번에 dry-run/apply하기 위한 kustomize 목록 |
 | `docs/TEST_RESULTS.md` | 로컬 평가와 검증 결과 기록 |
-| `docs/NEXT_STEPS.md` | 다음 진행 작업 |
 
 기본 문법 확인은 다음 명령으로 수행합니다.
 
