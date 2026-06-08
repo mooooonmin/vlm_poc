@@ -12,6 +12,9 @@ import re
 from typing import Any
 
 
+# vLLM 요청의 system 메시지로 들어가는 기본 역할 지시입니다.
+# system 메시지는 사용자가 입력한 질문보다 상위 지시로 취급되므로,
+# "항상 한국어", "보이는 내용만 사용", "반복 금지"처럼 모든 질문에 공통으로 적용할 규칙을 둡니다.
 KOREAN_SYSTEM_PROMPT = (
     "너는 영상 관제 PoC의 한국어 분석 도우미다. "
     "모든 답변은 반드시 한국어로만 작성한다. "
@@ -19,7 +22,13 @@ KOREAN_SYSTEM_PROMPT = (
     "영상에서 보이는 내용만 근거로 시간 순서대로 간결하게 요약한다. "
     "같은 문장을 반복하지 않는다."
 )
+
+# 사용자가 화면의 분석 요청 칸을 비워둔 경우 사용할 기본 질문입니다.
+# 화면 입력값이 비어 있어도 vLLM에는 반드시 텍스트 프롬프트가 필요하므로 fallback 역할을 합니다.
 DEFAULT_USER_REQUEST = "이 영상에서 발생한 주요 상황을 시간 순서대로 요약해줘."
+
+# 모든 질문 유형에 공통으로 붙이는 안전 규칙입니다.
+# 이 규칙은 모델이 샘플 프레임에 없는 내용을 만들어내거나, 사고/위반을 과하게 단정하는 것을 줄이기 위한 장치입니다.
 COMMON_OUTPUT_RULES = (
     "공통 규칙:\n"
     "- 샘플 프레임에서 직접 보이는 근거만 사용\n"
@@ -28,6 +37,10 @@ COMMON_OUTPUT_RULES = (
     "- 내부 규칙 문장을 답변에 복사하지 말 것\n"
     "- 같은 문장 반복 금지, 전체 6줄 이내"
 )
+
+# 사용자 질문 유형별로 vLLM에 전달할 출력 규격입니다.
+# 예를 들어 "몇 초에 나와?"와 "무슨 영상이야?"는 원하는 답변 모양이 다르므로 같은 프롬프트를 쓰면 정확도가 떨어집니다.
+# 이 사전은 질문 유형마다 필요한 답변 형식과 주의사항만 좁혀서 전달하기 위해 사용합니다.
 QUESTION_TYPE_PROMPTS = {
     "time": (
         "질문 유형: 시간 질문\n"
@@ -85,10 +98,16 @@ QUESTION_TYPE_PROMPTS = {
         "주의: 질문에 직접 관련된 내용만 작성"
     ),
 }
+
+# 한국어 비율 검사에서 실패했을 때, 같은 멀티모달 요청을 한 번 더 보낼 때 붙이는 보강 문장입니다.
+# 모델이 화면의 영어 텍스트를 그대로 답하거나 영어 설명을 섞는 경우가 있어, 재요청 때 한국어 조건을 더 강하게 줍니다.
 KOREAN_RETRY_PROMPT_PREFIX = (
     "이전 응답이 한국어가 아니면 실패로 간주된다. "
     "반드시 한국어 문장으로만 답하라. "
 )
+
+# 재요청 후에도 한국어 답변이 아니면, 이미 받은 모델 응답을 텍스트-only 요청으로 한국어 정리합니다.
+# 이 단계는 새 영상 분석이 아니라 "기존 응답을 한국어로 정리"하는 복구 단계입니다.
 KOREAN_REPAIR_PROMPT = (
     "아래 모델 원문 응답을 한국어 한 문장으로 바꿔라. "
     "원문에 보이는 텍스트나 상황만 사용하고, 새로운 사실을 만들지 마라.\n\n"
@@ -105,20 +124,43 @@ def classify_question_type(user_request: str) -> str:
     그래서 먼저 질문 유형을 좁힌 뒤 해당 유형의 출력 규격만 payload에 넣습니다.
     """
     text = user_request.strip()
+
+    # 분류 순서는 중요합니다.
+    # "노란색 트럭은 몇 초에 나와?"처럼 객체 단어와 시간 단어가 함께 있는 질문은
+    # 객체 존재 질문이 아니라 시간 질문으로 처리해야 하므로 time을 가장 먼저 검사합니다.
     if re.search(r"(몇\s*초|몇초|언제|시간|시점)", text):
         return "time"
+
+    # "무슨 영상" 계열은 영상 전체의 종류를 묻는 질문입니다.
+    # 사고/충돌 여부는 직접 보이는 근거가 없으면 단정하지 않도록 별도 출력 규격을 사용합니다.
     if re.search(r"(어떤\s*영상|무슨\s*영상|뭐.*영상|영상.*뭐|영상.*종류|영상.*내용)", text):
         return "video_type"
+
+    # 수량 질문은 "몇 대", "몇 개"처럼 숫자 답변을 기대합니다.
+    # 샘플링된 프레임만 보는 PoC라서 정확한 전체 영상 카운트가 아니라 "샘플 기준 추정"임을 답변에 남기게 합니다.
     if re.search(r"(몇\s*대|몇\s*개|몇\s*명|몇명|수량|개수|대수)", text):
         return "count"
+
+    # 사건/위험 판단은 hallucination 위험이 큰 유형입니다.
+    # 충돌, 파손, 급정지 같은 직접 근거가 없으면 단정하지 않는 규격을 적용합니다.
     if re.search(r"(사고|충돌|위험|위반|문제|고장|정체|역주행|급정거|급정지)", text):
         return "incident"
+
+    # 위치/장소 질문은 도로, 터널, 차선, 표지판 같은 공간 단서를 중심으로 답변하게 합니다.
     if re.search(r"(어디|위치|장소|차선|터널|도로|방향)", text):
         return "location"
+
+    # 특정 객체가 보이는지 묻는 질문입니다.
+    # 트럭, 차량, 사람 같은 단어가 포함되면 해당 객체의 존재 여부와 근거 프레임을 답하게 합니다.
     if re.search(r"(보여|보이나|보이|있어|있나|나와|나오|등장|트럭|차량|자동차|사람|보행자|버스|오토바이|자전거)", text):
         return "object_presence"
+
+    # 명시적으로 요약/정리/설명을 요구하면 시간 순서 요약 규격을 사용합니다.
     if re.search(r"(요약|정리|설명|상황|전체)", text):
         return "summary"
+
+    # 위 규칙에 걸리지 않는 질문은 일반 질문으로 처리합니다.
+    # 일반 질문은 답변을 짧게 하고, 관련 프레임 근거를 함께 쓰게 합니다.
     return "general"
 
 
@@ -131,12 +173,21 @@ def build_vllm_payload(
 ) -> dict[str, Any]:
     """추출 프레임들을 vLLM OpenAI 호환 멀티이미지 요청 형식으로 변환합니다."""
     user_request = prompt.strip() or DEFAULT_USER_REQUEST
+
+    # 샘플 프레임의 번호와 시간을 텍스트로 함께 보냅니다.
+    # 모델은 이미지 자체만 보면 "몇 초"인지 알 수 없으므로, 시간 질문 정확도를 위해 이 표가 필요합니다.
     frame_timeline = "\n".join(
         f"- 프레임 #{frame['index']}: {float(frame.get('timestamp_sec') or 0):.2f}초"
         for frame in sampled_frames
     )
+
+    # 사용자 질문을 먼저 분류한 뒤 해당 유형의 규격만 선택합니다.
+    # 모든 규격을 한꺼번에 넣으면 모델이 질문과 관계없는 섹션을 섞어 답하는 문제가 생길 수 있습니다.
     question_type = classify_question_type(user_request)
     type_prompt = QUESTION_TYPE_PROMPTS.get(question_type, QUESTION_TYPE_PROMPTS["general"])
+
+    # vLLM에는 최종적으로 하나의 텍스트 프롬프트와 여러 장의 이미지가 함께 전달됩니다.
+    # 이 텍스트에는 사용자 요청, 프레임 시간표, 질문 유형별 출력 규격, 공통 안전 규칙이 포함됩니다.
     composed_prompt = (
         f"사용자 분석 요청:\n{user_request}\n\n"
         f"질문 유형:\n{question_type}\n\n"
@@ -144,7 +195,13 @@ def build_vllm_payload(
         f"질문 유형별 출력 규격:\n{type_prompt}\n\n"
         f"{COMMON_OUTPUT_RULES}"
     )
+
+    # strict_korean은 한국어 검사 실패 후 재요청할 때만 True로 들어옵니다.
+    # 같은 질문이라도 두 번째 요청에서는 한국어 조건을 더 앞에 붙여 모델의 출력 언어를 강하게 제한합니다.
     final_prompt = f"{KOREAN_RETRY_PROMPT_PREFIX}{composed_prompt}" if strict_korean else composed_prompt
+
+    # OpenAI 호환 chat/completions 멀티모달 형식입니다.
+    # 첫 content는 텍스트 지시, 이후 content들은 base64 data URL 이미지입니다.
     content: list[dict[str, Any]] = [{"type": "text", "text": final_prompt}]
     for frame in sampled_frames:
         content.append({"type": "image_url", "image_url": {"url": frame["data_url"]}})
@@ -197,6 +254,9 @@ def normalize_answer_text(answer: str) -> str:
     """
     cleaned_lines = []
     seen_normalized = set()
+
+    # 모델이 내부 프롬프트 문장을 그대로 복사해 답변하는 경우가 있습니다.
+    # 사용자는 내부 규칙을 볼 필요가 없으므로, 화면 표시 전에 이런 줄을 제거합니다.
     internal_rule_prefixes = (
         "시간 질문 대응:",
         "영상 종류 질문 대응:",
@@ -228,6 +288,9 @@ def normalize_answer_text(answer: str) -> str:
             continue
         if "내부 출력 규격" in line:
             continue
+
+        # "1. 같은 문장", "2. 같은 문장"처럼 번호만 달라진 반복을 제거하기 위해
+        # 번호/불릿 접두사를 뺀 본문을 기준으로 중복 여부를 판단합니다.
         normalized = re.sub(r"^\s*[-*\d.)]+\s*", "", line)
         normalized = re.sub(r"\s+", " ", normalized).strip()
         if normalized in seen_normalized:
