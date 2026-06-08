@@ -112,6 +112,13 @@ textarea {
   background: #fff;
 }
 
+input[readonly],
+input[disabled] {
+  background: #f3f4f6;
+  color: #374151;
+  cursor: not-allowed;
+}
+
 textarea {
   min-height: 72px;
   resize: vertical;

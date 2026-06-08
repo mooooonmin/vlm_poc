@@ -73,16 +73,12 @@
             </div>
           </div>
           <details class="advanced-settings">
-            <summary>모델 / 엔드포인트 설정 - 추천 모델 3개 선택 가능</summary>
+            <summary>모델 / 엔드포인트 설정</summary>
             <div class="row">
               <div class="field">
-                <label for="modelId">모델 ID</label>
-                <select id="modelId" name="model_id">
-                  <option value="Qwen/Qwen3-VL-2B-Instruct" selected>Qwen/Qwen3-VL-2B-Instruct - 기본, 경량 VLM</option>
-                  <option value="Qwen/Qwen3-VL-4B-Instruct-FP8">Qwen/Qwen3-VL-4B-Instruct-FP8 - 4B FP8 후보</option>
-                  <option value="Qwen/Qwen2.5-VL-7B-Instruct-AWQ">Qwen/Qwen2.5-VL-7B-Instruct-AWQ - 7B AWQ 후보</option>
-                </select>
-                <div class="hint">현재 vLLM 컨테이너가 실제로 로드한 모델과 같은 ID를 선택해야 합니다. 모델을 바꾸려면 vLLM 컨테이너도 해당 모델로 다시 시작해야 합니다.</div>
+                <label for="modelId">사용 모델</label>
+                <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" disabled aria-disabled="true" />
+                <div class="hint">현재 vLLM 컨테이너에 로드된 모델입니다. 화면에서는 변경하지 않습니다.</div>
               </div>
               <div class="field">
                 <label for="endpoint">vLLM 엔드포인트</label>
