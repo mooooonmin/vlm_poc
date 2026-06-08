@@ -5,24 +5,42 @@
   color: #1f2937;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  padding: 24px;
+  padding: 14px;
+  height: 100%;
+  overflow: hidden;
 }
 
 main {
-  max-width: 1180px;
+  max-width: 1500px;
   margin: 0 auto;
+  height: calc(100vh - 28px);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 16px;
+  margin-bottom: 10px;
 }
 
 h1 {
-  margin: 0 0 8px;
-  font-size: 25px;
+  margin: 0 0 4px;
+  font-size: 24px;
 }
 
 h2 {
-  margin: 0 0 12px;
-  font-size: 18px;
+  margin: 0 0 10px;
+  font-size: 17px;
 }
 
 p {
@@ -30,29 +48,56 @@ p {
 }
 
 .summary {
-  margin: 0 0 18px;
+  margin: 0;
   color: #4b5563;
 }
 
-.grid {
+.dashboard-grid {
   display: grid;
-  grid-template-columns: minmax(0, 420px) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(320px, 390px) minmax(430px, 1fr) minmax(300px, 360px);
+  gap: 12px;
   align-items: start;
+  flex: 1;
+  min-height: 0;
 }
 
 section {
   background: #fff;
   border: 1px solid #d9e1ec;
   border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.runtime-panel {
+  padding-bottom: 10px;
+}
+
+.runtime-top {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.input-panel,
+.result-panel,
+.side-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.input-panel {
+  position: sticky;
+  top: 10px;
 }
 
 label {
   display: block;
-  margin-bottom: 6px;
+  margin-bottom: 5px;
   font-weight: 700;
+  font-size: 13px;
 }
 
 input,
@@ -61,13 +106,13 @@ textarea {
   box-sizing: border-box;
   border: 1px solid #c8d2df;
   border-radius: 6px;
-  padding: 10px;
+  padding: 8px 9px;
   font: inherit;
   background: #fff;
 }
 
 textarea {
-  min-height: 150px;
+  min-height: 72px;
   resize: vertical;
 }
 
@@ -77,8 +122,9 @@ button {
   background: #155eef;
   color: #fff;
   font-weight: 700;
-  padding: 10px 13px;
+  padding: 9px 11px;
   cursor: pointer;
+  font-size: 13px;
 }
 
 button.secondary {
@@ -95,7 +141,7 @@ button:disabled {
 }
 
 .field {
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .row {
@@ -107,14 +153,19 @@ button:disabled {
 .button-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 7px;
+}
+
+.compact-actions {
+  justify-content: flex-end;
+  max-width: 760px;
 }
 
 .badges {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
+  gap: 5px;
+  margin-top: 8px;
 }
 
 .badges span {
@@ -122,18 +173,46 @@ button:disabled {
   border-radius: 999px;
   background: #f9fafb;
   color: #374151;
-  padding: 5px 9px;
+  padding: 4px 8px;
   font-size: 12px;
 }
 
 .status {
-  min-height: 22px;
-  margin-top: 10px;
+  min-height: 20px;
+  margin-top: 6px;
   color: #4b5563;
 }
 
 .check-panel {
-  margin-top: 12px;
+  margin-top: 8px;
+}
+
+.worker-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  color: #1f2937;
+}
+
+.worker-chip {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  gap: 7px;
+  align-items: center;
+  border: 1px solid #d9e1ec;
+  border-radius: 6px;
+  background: #f9fafb;
+  padding: 5px 7px;
+  font-size: 12px;
+}
+
+.worker-chip code {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .check-header {
@@ -152,13 +231,13 @@ button:disabled {
 .check-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .check-table th,
 .check-table td {
   border: 1px solid #d9e1ec;
-  padding: 8px;
+  padding: 7px;
   text-align: left;
   vertical-align: top;
 }
@@ -213,8 +292,8 @@ button:disabled {
 
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 8px;
 }
 
 .frame-card {
@@ -226,7 +305,7 @@ button:disabled {
 
 .frame-card img {
   width: 100%;
-  height: 96px;
+  height: 74px;
   object-fit: cover;
   display: block;
 }
@@ -239,18 +318,39 @@ button:disabled {
 
 pre {
   margin: 0;
-  padding: 12px;
+  padding: 10px;
   border-radius: 6px;
   background: #111827;
   color: #e5e7eb;
   white-space: pre-wrap;
   word-break: break-word;
   overflow: auto;
-  min-height: 160px;
+  min-height: 120px;
+  max-height: 42vh;
 }
 
 details {
-  margin-top: 10px;
+  margin-top: 8px;
+}
+
+.advanced-settings {
+  margin: 0 0 8px;
+}
+
+.advanced-settings summary {
+  color: #374151;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.advanced-settings .row {
+  margin-top: 8px;
+}
+
+.runtime-detail pre {
+  max-height: 220px;
+  min-height: 120px;
 }
 
 .hint {
@@ -259,7 +359,7 @@ details {
 }
 
 .section-subtitle {
-  margin-top: 22px;
+  margin-top: 16px;
 }
 
 .stats-panel {
@@ -268,21 +368,21 @@ details {
 
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-bottom: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 7px;
 }
 
 .stat-grid div {
   border: 1px solid #d9e1ec;
   border-radius: 6px;
   background: #f9fafb;
-  padding: 9px;
+  padding: 7px;
 }
 
 .stat-grid strong {
   display: block;
-  font-size: 18px;
+  font-size: 16px;
   color: #111827;
 }
 
@@ -295,20 +395,20 @@ details {
 
 .job-list {
   display: grid;
-  gap: 8px;
+  gap: 7px;
 }
 
 .evaluation-list {
   display: grid;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .evaluation-item {
   border: 1px solid #d9e1ec;
   border-radius: 6px;
   background: #fff;
-  padding: 10px;
+  padding: 9px;
 }
 
 .evaluation-item strong,
@@ -323,7 +423,7 @@ details {
 }
 
 .stat-grid.compact {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-top: 8px;
 }
 
@@ -361,12 +461,34 @@ details {
 
 @media (max-width: 900px) {
   body {
+    height: auto;
+    overflow: auto;
+  }
+
+  main {
+    height: auto;
+  }
+
+  body {
     padding: 14px;
   }
 
-  .grid,
+  .dashboard-grid,
+  .runtime-top,
   .row,
   .stat-grid {
     grid-template-columns: 1fr;
+  }
+
+  .compact-actions {
+    justify-content: flex-start;
+  }
+
+  .input-panel,
+  .result-panel,
+  .side-panel {
+    max-height: none;
+    overflow: visible;
+    position: static;
   }
 }

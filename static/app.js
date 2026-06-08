@@ -96,37 +96,17 @@ async function refreshWorkers() {
 
 function renderWorkers(workers) {
   $("workerPanel").innerHTML = `
-    <div class="check-header">
+    <div class="worker-strip">
       <strong>vLLM Worker</strong>
-      <span>영상 job은 ready 상태 worker에 배정됩니다.</span>
-    </div>
-    <div class="check-table-wrap">
-      <table class="check-table">
-        <thead>
-          <tr>
-            <th>상태</th>
-            <th>Worker</th>
-            <th>Endpoint</th>
-            <th>처리 중 job</th>
-            <th>마지막 오류</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${workers.map((worker) => `
-            <tr>
-              <td><span class="check-status ${escapeHtml(worker.status || "unknown")}">${escapeHtml(worker.status || "-")}</span></td>
-              <td>${escapeHtml(worker.worker_id || "-")}</td>
-              <td><code>${escapeHtml(worker.endpoint || "-")}</code></td>
-              <td>${escapeHtml(worker.active_job_id || "-")}</td>
-              <td>${escapeHtml(worker.last_error || "-")}</td>
-            </tr>
-          `).join("") || `
-            <tr>
-              <td colspan="5">등록된 worker가 없습니다.</td>
-            </tr>
-          `}
-        </tbody>
-      </table>
+      ${workers.map((worker) => `
+        <div class="worker-chip">
+          <span class="check-status ${escapeHtml(worker.status || "unknown")}">${escapeHtml(worker.status || "-")}</span>
+          <b>${escapeHtml(worker.worker_id || "-")}</b>
+          <code>${escapeHtml(worker.endpoint || "-")}</code>
+          <span>job: ${escapeHtml(worker.active_job_id || "-")}</span>
+          <span>오류: ${escapeHtml(worker.last_error || "-")}</span>
+        </div>
+      `).join("") || `<span class="hint">등록된 worker가 없습니다.</span>`}
     </div>
   `;
 }

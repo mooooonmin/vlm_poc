@@ -8,33 +8,41 @@
 </head>
 <body>
   <main>
-    <h1>영상 VLM 분석 PoC</h1>
-    <p class="summary">
-      영상 파일 또는 YouTube URL을 입력하면 프레임을 균등 추출하고, Qwen VLM을 vLLM OpenAI 호환 API로 호출해 한국어 분석 결과를 받습니다.
-    </p>
-
-    <section>
-      <h2>런타임 상태</h2>
-      <div class="button-row">
-        <button type="button" onclick="refreshRuntime()">상태 새로고침</button>
-        <button type="button" onclick="startVllm()">vLLM 시작 / GPU 점유</button>
-        <button type="button" class="danger" onclick="stopVllm()">vLLM 종료 / GPU 해제</button>
-        <button type="button" class="secondary" onclick="loadVllmLogs()">vLLM 로그</button>
-        <button type="button" class="secondary" onclick="refreshWorkers()">Worker 상태 새로고침</button>
-        <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그 수집</button>
+    <header class="page-header">
+      <div>
+        <h1>영상 VLM 분석 PoC</h1>
+        <p class="summary">
+          영상 파일 또는 YouTube URL을 입력하면 프레임을 균등 추출하고, Qwen VLM을 vLLM OpenAI 호환 API로 호출해 한국어 분석 결과를 받습니다.
+        </p>
       </div>
-      <div id="runtimeStatus" class="status">아직 확인하지 않았습니다.</div>
+    </header>
+
+    <section class="runtime-panel">
+      <div class="runtime-top">
+        <div>
+          <h2>런타임 상태</h2>
+          <div id="runtimeStatus" class="status">아직 확인하지 않았습니다.</div>
+        </div>
+        <div class="button-row compact-actions">
+          <button type="button" onclick="refreshRuntime()">상태 새로고침</button>
+          <button type="button" onclick="startVllm()">vLLM 시작 / GPU 점유</button>
+          <button type="button" class="danger" onclick="stopVllm()">vLLM 종료 / GPU 해제</button>
+          <button type="button" class="secondary" onclick="loadVllmLogs()">vLLM 로그</button>
+          <button type="button" class="secondary" onclick="refreshWorkers()">Worker 상태 새로고침</button>
+          <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그 수집</button>
+        </div>
+      </div>
       <div id="runtimeBadges" class="badges"></div>
       <div id="workerPanel" class="check-panel"></div>
       <div id="timeslicingResult" class="check-panel"></div>
-      <details open>
+      <details class="runtime-detail">
         <summary>CUDA / vLLM / Time-slicing 상세</summary>
         <pre id="runtimeDetail"></pre>
       </details>
     </section>
 
-    <div class="grid">
-      <section>
+    <div class="dashboard-grid">
+      <section class="input-panel">
         <h2>영상 입력</h2>
         <form id="analyzeForm">
           <div class="field">
@@ -56,17 +64,20 @@
               <input id="maxTokens" name="max_tokens" type="number" min="64" max="2048" value="512" />
             </div>
           </div>
-          <div class="row">
-            <div class="field">
-              <label for="modelId">모델 ID</label>
-              <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" />
+          <details class="advanced-settings">
+            <summary>모델 / 엔드포인트 설정</summary>
+            <div class="row">
+              <div class="field">
+                <label for="modelId">모델 ID</label>
+                <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" />
+              </div>
+              <div class="field">
+                <label for="endpoint">vLLM 엔드포인트</label>
+                <input id="endpoint" name="endpoint" value="http://localhost:8000/v1/chat/completions" />
+                <div class="hint">실제 분산 처리는 VLLM_WORKERS endpoint를 사용합니다.</div>
+              </div>
             </div>
-            <div class="field">
-              <label for="endpoint">vLLM 엔드포인트</label>
-              <input id="endpoint" name="endpoint" value="http://localhost:8000/v1/chat/completions" />
-              <div class="hint">호환용 입력값입니다. 실제 분산 처리는 서버의 VLLM_WORKERS 설정에 등록된 worker endpoint를 사용합니다.</div>
-            </div>
-          </div>
+          </details>
           <div class="field">
             <label for="prompt">분석 프롬프트</label>
             <textarea id="prompt" name="prompt">이 영상에서 발생한 주요 상황을 시간 순서대로 한국어로만 요약해줘. 다른 언어는 사용하지 말고, 보이는 내용만 근거로 작성해줘.</textarea>
@@ -74,19 +85,9 @@
           <button id="analyzeBtn" type="submit">영상 분석 작업 생성</button>
           <div id="analyzeStatus" class="status"></div>
         </form>
-
-        <h2 class="section-subtitle">최근 작업</h2>
-        <div id="jobStats" class="stats-panel"></div>
-        <div id="jobList" class="job-list"></div>
-
-        <h2 class="section-subtitle">평가 리포트</h2>
-        <div class="button-row">
-          <button type="button" class="secondary" onclick="refreshEvaluations()">평가 리포트 새로고침</button>
-        </div>
-        <div id="evaluationList" class="evaluation-list"></div>
       </section>
 
-      <section>
+      <section class="result-panel">
         <h2>분석 결과</h2>
         <div id="jobStatus" class="status">아직 분석 작업이 없습니다.</div>
         <div class="field">
@@ -101,6 +102,18 @@
           <summary>원본 JSON</summary>
           <pre id="rawJson"></pre>
         </details>
+      </section>
+
+      <section class="side-panel">
+        <h2>최근 작업</h2>
+        <div id="jobStats" class="stats-panel"></div>
+        <div id="jobList" class="job-list"></div>
+
+        <h2 class="section-subtitle">평가 리포트</h2>
+        <div class="button-row">
+          <button type="button" class="secondary" onclick="refreshEvaluations()">평가 리포트 새로고침</button>
+        </div>
+        <div id="evaluationList" class="evaluation-list"></div>
       </section>
     </div>
   </main>

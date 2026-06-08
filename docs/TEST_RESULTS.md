@@ -29,12 +29,21 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 - 위 이유로 한국어 retry/repair 후에도 fallback이 발생했습니다. 실제 관제 영상 또는 한국어 텍스트가 없는 영상에서는 별도 검증이 필요합니다.
 - 현재 기록은 성능 벤치마크가 아니라 PoC 기능 검증 기록입니다.
 
+## UI Layout QA
+
+| 일시 | 화면 크기 | 확인 결과 | 근거 |
+| --- | --- | --- | --- |
+| 2026-06-08 | 1365x768 | 런타임 상세를 접은 상태에서 영상 입력, 분석 결과, 최근 작업을 3열 대시보드로 표시했습니다. 전체 페이지 스크롤 대신 입력/결과/최근 작업 패널 내부 스크롤을 사용합니다. | `tmp/layout_qa_loaded_compact_worker.png`, Edge headless screenshot |
+
+검증 범위는 테스트 화면의 배치 확인입니다. 실제 영상 분석 품질이나 vLLM 처리 성능 검증은 이 항목에 포함하지 않았습니다.
+
 ## 검증 명령
 
 ```powershell
 .\.venv\Scripts\python.exe -m py_compile app.py runtime_utils.py job_store.py worker_registry.py evaluation_runner.py
 node --check static\app.js
 git diff --check
+& 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' --headless --disable-gpu --window-size=1365,768 --virtual-time-budget=5000 --screenshot=D:\project\vlm_test\tmp\layout_qa_loaded_compact_worker.png http://127.0.0.1:8080
 Invoke-RestMethod -Uri http://localhost:8000/v1/models -TimeoutSec 10
 .\.venv\Scripts\python.exe evaluation_runner.py --synthetic-count 3 --frame-count 1 --max-tokens 128 --timeout-sec 180
 ```
