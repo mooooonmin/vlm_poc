@@ -39,6 +39,7 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 | 2026-06-08 | 1365x768 | 영상 입력 슬롯 3개를 표시하고, 입력된 슬롯만 batch job으로 생성하는 화면을 확인했습니다. | `tmp/layout_batch_inputs.png`, Edge headless screenshot |
 | 2026-06-08 | 1365x768 | 흰색/옅은 회색 구획, 파란 액센트, 간결한 상태 카드 중심의 금융 앱형 UI 톤을 적용했습니다. | `tmp/layout_toss_like.png`, Edge headless screenshot |
 | 2026-06-08 | 1365x768 | 기본 화면의 긴 설명, 상세 런타임 도구, 평가 리포트, 상세 통계를 접힘 영역으로 이동해 입력/결과/최근 작업 중심으로 단순화했습니다. | `tmp/layout_simplified.png`, Edge headless screenshot |
+| 2026-06-08 | API | 분석 form에 `action="/api/jobs/video-batch"`, `method="post"`, `enctype="multipart/form-data"`를 명시해 기본 form 제출이 `POST /`로 가며 405를 내는 경로를 차단했습니다. | `curl -i -X POST /api/jobs/video-batch`, `curl -i -X POST /` |
 
 검증 범위는 테스트 화면의 배치 확인입니다. 실제 영상 분석 품질이나 vLLM 처리 성능 검증은 이 항목에 포함하지 않았습니다.
 
