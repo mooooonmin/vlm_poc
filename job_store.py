@@ -202,7 +202,7 @@ def get_job_stats(limit: int = 50) -> dict[str, Any]:
     }
 
 
-def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, dry_run: bool = False) -> dict[str, Any]:
+def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, logs_dir: Path, dry_run: bool = False) -> dict[str, Any]:
     """
     완료/실패한 job과 테스트용 임시 파일을 정리합니다.
 
@@ -212,6 +212,7 @@ def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, dry_run: bool = False)
     - 메모리에는 없지만 `tmp/jobs`에 남아 있는 고아 job 폴더
     - `tmp/evaluation_samples`, `tmp/validation` 테스트 샘플 폴더
     - `tmp/layout_*.png` 화면 검증 스크린샷
+    - `logs/evaluation/*`, `logs/timeslicing/*` 자동 생성 리포트 폴더
     - 메모리에 남아 있는 해당 job 상태
 
     삭제하지 않는 대상:
@@ -224,6 +225,7 @@ def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, dry_run: bool = False)
     """
     tmp_root = tmp_dir.resolve()
     frame_root = frame_dir.resolve()
+    logs_root = logs_dir.resolve()
     jobs_root = tmp_root / "jobs"
     with STORE_LOCK:
         jobs_snapshot = [dict(job) for job in JOBS.values()]
@@ -248,6 +250,7 @@ def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, dry_run: bool = False)
     deleted_orphan_job_dirs = 0
     deleted_extra_dirs = 0
     deleted_extra_files = 0
+    deleted_log_dirs = 0
     freed_bytes = 0
     planned_frame_paths: set[Path] = set()
     planned_job_dirs: set[Path] = set()
@@ -333,6 +336,21 @@ def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, dry_run: bool = False)
             except OSError as error:
                 errors.append({"job_id": "", "path": str(extra_file), "error": str(error)})
 
+    # 자동 평가와 time-slicing 검증은 매 실행마다 logs 하위에 리포트 폴더를 만듭니다.
+    # 사람이 관리하는 docs/TEST_RESULTS.md는 삭제 대상이 아니며, logs 전체가 아니라 생성 리포트 폴더만 정리합니다.
+    for log_category in ("evaluation", "timeslicing"):
+        category_root = logs_root / log_category
+        if not category_root.exists() or not _is_within(category_root, logs_root):
+            continue
+        for log_dir in category_root.iterdir():
+            if not log_dir.is_dir() or not _is_within(log_dir, category_root):
+                continue
+            try:
+                freed_bytes += _delete_path(log_dir, dry_run)
+                deleted_log_dirs += 1
+            except OSError as error:
+                errors.append({"job_id": "", "path": str(log_dir), "error": str(error)})
+
     if not dry_run and deleted_job_ids:
         with STORE_LOCK:
             for job_id in deleted_job_ids:
@@ -350,6 +368,7 @@ def cleanup_finished_jobs(tmp_dir: Path, frame_dir: Path, dry_run: bool = False)
         "deleted_orphan_job_dir_count": deleted_orphan_job_dirs,
         "deleted_extra_dir_count": deleted_extra_dirs,
         "deleted_extra_file_count": deleted_extra_files,
+        "deleted_log_dir_count": deleted_log_dirs,
         "skipped_active_job_count": len(skipped),
         "skipped_active_job_ids": [str(job.get("job_id")) for job in skipped],
         "freed_bytes": freed_bytes,

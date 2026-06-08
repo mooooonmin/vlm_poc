@@ -63,6 +63,7 @@ from worker_registry import acquire_ready_worker, list_workers, refresh_workers,
 BASE_DIR = Path(__file__).resolve().parent
 TMP_DIR = BASE_DIR / "tmp"
 FRAME_DIR = TMP_DIR / "frames"
+LOG_DIR = BASE_DIR / "logs"
 TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
@@ -768,7 +769,7 @@ def api_cleanup_tmp_files(dry_run: bool = False) -> dict[str, Any]:
     queued/running job은 삭제하지 않습니다.
     dry_run=true를 붙이면 실제 삭제 없이 삭제 예정 개수와 용량만 계산합니다.
     """
-    return cleanup_finished_jobs(TMP_DIR, FRAME_DIR, dry_run=dry_run)
+    return cleanup_finished_jobs(TMP_DIR, FRAME_DIR, LOG_DIR, dry_run=dry_run)
 
 
 @app.get("/api/evaluations")

@@ -64,7 +64,7 @@ RTX 4070 Ti에서 OOM이 발생하면 샘플 프레임 수를 `4`로 낮추고, 
 | `GET` | `/api/batches/{batch_id}` | batch 진행률 조회 |
 | `GET` | `/api/jobs/{job_id}` | 단일 job 결과 조회 |
 | `GET` | `/api/jobs/stats` | 최근 job 통계 조회 |
-| `POST` | `/api/tmp/cleanup` | 완료/실패 job과 tmp 테스트 산출물 정리 |
+| `POST` | `/api/tmp/cleanup` | 완료/실패 job, tmp 산출물, 생성 로그 정리 |
 | `GET` | `/api/timeslicing` | time-slicing 안내 조회 |
 | `POST` | `/api/timeslicing/logs` | K8s 검증 로그 수집 |
 
@@ -94,7 +94,7 @@ RTX 4070 Ti에서 OOM이 발생하면 샘플 프레임 수를 `4`로 낮추고, 
 | `logs/evaluation/{run_id}/` | 평가 러너 리포트 |
 | `logs/timeslicing/{run_id}/` | Kubernetes/time-slicing 검증 리포트 |
 
-`임시파일 정리`는 완료/실패 job, 고아 프레임, `tmp/evaluation_samples`, `tmp/validation`, `tmp/layout_*.png`를 삭제합니다. 진행 중인 `queued/running` job은 삭제하지 않습니다.
+`임시파일 정리`는 완료/실패 job, 고아 프레임, `tmp/evaluation_samples`, `tmp/validation`, `tmp/layout_*.png`, `logs/evaluation/*`, `logs/timeslicing/*`를 삭제합니다. 진행 중인 `queued/running` job과 문서 파일인 `docs/TEST_RESULTS.md`는 삭제하지 않습니다.
 
 ## 모델과 라이선스
 

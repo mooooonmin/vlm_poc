@@ -26,6 +26,7 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 | 2026-06-08 | 주석 보강 | 성공 | `app.py`, `static/app.js`, `evaluation_runner.py`, `prompt_utils.py` 보강 후 정적 검증 |
 | 2026-06-08 | 임시파일 정리 버튼 | 성공 | `POST /api/tmp/cleanup?dry_run=true`로 정리 대상 확인 |
 | 2026-06-08 | 임시파일 정리 범위 확장 | 성공 | 고아 job 폴더, 고아 프레임, 평가/검증 폴더, layout 이미지가 dry-run 대상에 포함됨 |
+| 2026-06-08 | 생성 로그 정리 범위 확장 | 성공 | `logs/evaluation/*`, `logs/timeslicing/*`가 dry-run 대상에 포함됨 |
 | 2026-06-08 | UI 레이아웃 | 성공 | 1365x768 headless screenshot 기준 3열 대시보드와 정리 버튼 표시 확인 |
 
 ## 최근 확인한 정리 대상
@@ -34,11 +35,12 @@ Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재
 
 | 항목 | 개수 |
 | --- | ---: |
-| 고아 job 폴더 | 2 |
-| 고아 프레임 | 12 |
-| 평가/검증 폴더 | 2 |
-| layout 이미지 | 15 |
-| 예상 정리 용량 | 11,367,630 bytes |
+| 고아 job 폴더 | 0 |
+| 고아 프레임 | 0 |
+| 평가/검증 폴더 | 0 |
+| layout 이미지 | 0 |
+| 생성 로그 폴더 | 9 |
+| 예상 정리 용량 | 173,235 bytes |
 
 ## 검증 명령
 
