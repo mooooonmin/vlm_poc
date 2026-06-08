@@ -77,11 +77,13 @@ KOREAN_SYSTEM_PROMPT = (
 DEFAULT_USER_REQUEST = "이 영상에서 발생한 주요 상황을 시간 순서대로 요약해줘."
 INTERNAL_OUTPUT_FORMAT_PROMPT = (
     "보이는 장면만 근거로 아래 형식에 맞춰 한국어로 답해줘.\n"
+    "시간 질문이면 첫 줄에 '답변: 약 N초' 또는 '답변: 확인 불가'를 작성\n"
     "요약: 실제 관찰한 전체 상황을 1문장으로 작성\n"
     "주요 장면:\n"
     "- 실제 관찰한 내용을 시간 순서대로 최대 3개 작성\n"
-    "주의: 불확실한 내용 또는 확인 불가 항목 작성\n"
-    "규칙: 위 설명문을 그대로 복사하지 말 것, 번호 매기기 금지, 같은 문장 반복 금지, 전체 6줄 이내"
+    "시간 질문 대응: 사용자가 '몇 초'를 묻는 경우 반드시 제공된 샘플 프레임 시간 중 가장 가까운 초를 답할 것\n"
+    "주의: 샘플 프레임 사이에서만 추정되는 내용은 '약 N초'라고 쓰고, 확인 불가하면 '확인 불가'라고 작성\n"
+    "규칙: 내부 출력 규격 문장을 답변에 복사하지 말 것, 번호 매기기 금지, 같은 문장 반복 금지, 전체 6줄 이내"
 )
 KOREAN_RETRY_PROMPT_PREFIX = (
     "이전 응답이 한국어가 아니면 실패로 간주된다. "
@@ -114,20 +116,34 @@ DISPATCHER_LOCK = threading.Lock()
 def build_vllm_payload(
     model_id: str,
     prompt: str,
-    frame_data_urls: list[str],
+    sampled_frames: list[dict[str, Any]],
     max_tokens: int,
     strict_korean: bool = False,
 ) -> dict[str, Any]:
     """추출 프레임들을 vLLM OpenAI 호환 멀티이미지 요청 형식으로 변환합니다."""
     user_request = prompt.strip() or DEFAULT_USER_REQUEST
+    frame_timeline = "\n".join(
+        f"- 프레임 #{frame['index']}: {float(frame.get('timestamp_sec') or 0):.2f}초"
+        for frame in sampled_frames
+    )
+    time_question_instruction = ""
+    if re.search(r"(몇\s*초|몇초|언제|시간|시점)", user_request):
+        time_question_instruction = (
+            "\n\n시간 질문 전용 지시:\n"
+            "- 답변 첫 줄은 반드시 '답변: 약 N초' 또는 '답변: 확인 불가' 형식으로 작성\n"
+            "- N은 샘플 프레임 시간표에 있는 초 값 중 가장 가까운 값을 사용\n"
+            "- 샘플 프레임 사이를 추정한 경우 '약'을 붙일 것"
+        )
     composed_prompt = (
         f"사용자 분석 요청:\n{user_request}\n\n"
+        f"샘플 프레임 시간표:\n{frame_timeline}\n\n"
         f"내부 출력 규격:\n{INTERNAL_OUTPUT_FORMAT_PROMPT}"
+        f"{time_question_instruction}"
     )
     final_prompt = f"{KOREAN_RETRY_PROMPT_PREFIX}{composed_prompt}" if strict_korean else composed_prompt
     content: list[dict[str, Any]] = [{"type": "text", "text": final_prompt}]
-    for data_url in frame_data_urls:
-        content.append({"type": "image_url", "image_url": {"url": data_url}})
+    for frame in sampled_frames:
+        content.append({"type": "image_url", "image_url": {"url": frame["data_url"]}})
 
     return {
         "model": model_id,
@@ -162,9 +178,21 @@ def normalize_answer_text(answer: str) -> str:
     """
     cleaned_lines = []
     seen_normalized = set()
+    internal_rule_prefixes = (
+        "시간 질문 대응:",
+        "규칙:",
+        "내부 출력 규격:",
+        "사용자 분석 요청:",
+    )
     for raw_line in answer.splitlines():
         line = raw_line.strip()
         if not line:
+            continue
+        if line.startswith(internal_rule_prefixes):
+            continue
+        if "사용자가 '몇 초'" in line or "사용자가 ‘몇 초’" in line:
+            continue
+        if "내부 출력 규격" in line:
             continue
         normalized = re.sub(r"^\s*[-*\d.)]+\s*", "", line)
         normalized = re.sub(r"\s+", " ", normalized).strip()
@@ -175,7 +203,43 @@ def normalize_answer_text(answer: str) -> str:
             cleaned_lines.append(f"- {normalized}")
         else:
             cleaned_lines.append(line)
-    return "\n".join(cleaned_lines) if cleaned_lines else answer.strip()
+    return "\n".join(cleaned_lines[:6]) if cleaned_lines else answer.strip()
+
+
+def refine_time_question_answer(answer: str, user_request: str) -> str:
+    """
+    시간 질문 답변의 첫 줄을 보정합니다.
+
+    모델이 본문에는 "프레임 #2: 1.00초에 ..."처럼 시간을 적고도 첫 줄에 "확인 불가"라고 쓰는 경우가 있습니다.
+    이 함수는 모델 응답 안에 이미 존재하는 시간 근거만 사용해 첫 줄을 `답변: 약 N초`로 맞춥니다.
+    """
+    if not re.search(r"(몇\s*초|몇초|언제|시간|시점)", user_request):
+        return answer
+
+    stopwords = {"몇초", "몇", "초", "초에", "나와", "나오", "보여", "보이", "언제", "시간", "시점", "텍스트"}
+    keywords = []
+    for token in re.findall(r"[가-힣A-Za-z0-9-]{2,}", user_request):
+        cleaned = re.sub(r"(은|는|이|가|을|를|에|에서)$", "", token)
+        if cleaned and cleaned not in stopwords:
+            keywords.append(cleaned)
+    lines = answer.splitlines()
+    selected_time = None
+    for line in lines:
+        if len(keywords) >= 2 and not all(keyword in line for keyword in keywords):
+            continue
+        if len(keywords) == 1 and keywords[0] not in line:
+            continue
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*초", line)
+        if match:
+            selected_time = match.group(1)
+            break
+
+    if not selected_time:
+        return answer
+
+    first_line = f"답변: 약 {selected_time}초"
+    rest = [line for line in lines if not line.startswith("답변:")]
+    return "\n".join([first_line, *rest])
 
 
 def call_vllm(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -413,11 +477,18 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
 
         current_stage = "payload_prepare"
         update_job(job_id, message="프레임을 vLLM 요청용 base64 이미지로 변환하는 중입니다.")
-        frame_data_urls = [encode_frame_to_data_url(Path(frame["path"])) for frame in frames]
+        sampled_frames = [
+            {
+                "index": frame["index"],
+                "timestamp_sec": frame["timestamp_sec"],
+                "data_url": encode_frame_to_data_url(Path(frame["path"])),
+            }
+            for frame in frames
+        ]
         payload = build_vllm_payload(
             str(settings["model_id"]),
             str(settings["prompt"]),
-            frame_data_urls,
+            sampled_frames,
             int(settings["max_tokens"]),
         )
 
@@ -431,6 +502,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         )
         raw_response = call_vllm(worker_endpoint, payload)
         answer = normalize_answer_text(extract_answer(raw_response))
+        answer = refine_time_question_answer(answer, str(settings["prompt"]))
         korean_check = assess_korean_response(answer)
         korean_retry_used = False
         korean_repair_used = False
@@ -444,12 +516,13 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             retry_payload = build_vllm_payload(
                 str(settings["model_id"]),
                 str(settings["prompt"]),
-                frame_data_urls,
+                sampled_frames,
                 int(settings["max_tokens"]),
                 strict_korean=True,
             )
             raw_response = call_vllm(worker_endpoint, retry_payload)
             answer = normalize_answer_text(extract_answer(raw_response))
+            answer = refine_time_question_answer(answer, str(settings["prompt"]))
             korean_check = assess_korean_response(answer)
             korean_retry_used = True
         if KOREAN_RETRY_ENABLED and not korean_check["ok"] and answer.strip():
@@ -466,6 +539,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             )
             repair_response = call_vllm(worker_endpoint, repair_payload)
             repair_answer = normalize_answer_text(extract_answer(repair_response))
+            repair_answer = refine_time_question_answer(repair_answer, str(settings["prompt"]))
             repair_check = assess_korean_response(repair_answer)
             if repair_answer.strip():
                 raw_response = {
