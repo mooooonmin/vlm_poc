@@ -36,6 +36,7 @@ from prompt_utils import (
     extract_answer,
     normalize_answer_text,
     refine_question_specific_answer,
+    should_retry_low_information_answer,
 )
 from runtime_utils import (
     DEFAULT_GPU_MEMORY_UTILIZATION,
@@ -346,6 +347,32 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         raw_response = call_vllm(worker_endpoint, payload)
         answer = normalize_answer_text(extract_answer(raw_response))
         answer = refine_question_specific_answer(answer, str(settings["prompt"]))
+        low_information_retry_used = False
+        if should_retry_low_information_answer(answer, str(settings["prompt"])):
+            update_job(
+                job_id,
+                message="응답이 확인 불가 한 줄로 끝나 같은 프레임과 질문으로 1회 재요청합니다.",
+                low_information_retry_used=True,
+            )
+            retry_response = call_vllm(
+                worker_endpoint,
+                build_vllm_payload(
+                    str(settings["model_id"]),
+                    str(settings["prompt"]),
+                    sampled_frames,
+                    int(settings["max_tokens"]),
+                    low_information_retry=True,
+                ),
+            )
+            retry_answer = normalize_answer_text(extract_answer(retry_response))
+            retry_answer = refine_question_specific_answer(retry_answer, str(settings["prompt"]))
+            if retry_answer.strip() and not should_retry_low_information_answer(retry_answer, str(settings["prompt"])):
+                raw_response = {
+                    "original_low_information_response": raw_response,
+                    "low_information_retry_response": retry_response,
+                }
+                answer = retry_answer
+                low_information_retry_used = True
         korean_check = assess_korean_response(answer)
         korean_retry_used = False
         korean_repair_used = False
@@ -426,6 +453,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             korean_retry_used=korean_retry_used,
             korean_repair_used=korean_repair_used,
             korean_fallback_used=korean_fallback_used,
+            low_information_retry_used=low_information_retry_used,
             loop_checks=loop_checks,
             vllm_request_finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             vllm_duration_ms=vllm_duration_ms,
