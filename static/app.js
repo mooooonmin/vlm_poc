@@ -69,6 +69,11 @@ function applyConfigToForm(config) {
     frameInput.value = String(config.default_frame_count);
     frameInput.dataset.configApplied = "1";
   }
+  const tokenInput = $("maxTokens");
+  if (tokenInput && config.default_max_tokens && !tokenInput.dataset.configApplied) {
+    tokenInput.value = String(config.default_max_tokens);
+    tokenInput.dataset.configApplied = "1";
+  }
 }
 
 async function startVllm() {

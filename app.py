@@ -72,6 +72,7 @@ STATIC_DIR = BASE_DIR / "static"
 # 초당 1프레임 방식에서는 1분 영상이면 약 60장이 생성됩니다.
 # RTX 4070 Ti 12GB PoC에서는 긴 영상을 무제한으로 넣지 않도록 최대 추출 장수를 제한합니다.
 MAX_SAMPLE_FRAMES = int(os.environ.get("MAX_SAMPLE_FRAMES", "120"))
+DEFAULT_MAX_TOKENS = int(os.environ.get("DEFAULT_MAX_TOKENS", "1024"))
 MAX_BATCH_VIDEOS = 3
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 MAX_VIDEO_DURATION_SEC = int(os.environ.get("MAX_VIDEO_DURATION_SEC", "1800"))
@@ -732,7 +733,7 @@ async def api_create_video_job(
     video_file: UploadFile | None = File(default=None),
     video_url: str = Form(default=""),
     frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
-    max_tokens: int = Form(default=512),
+    max_tokens: int = Form(default=DEFAULT_MAX_TOKENS),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
     prompt: str = Form(default=DEFAULT_USER_REQUEST),
@@ -751,7 +752,7 @@ async def api_create_video_batch(
     video_file_3: UploadFile | None = File(default=None),
     video_url_3: str = Form(default=""),
     frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
-    max_tokens: int = Form(default=512),
+    max_tokens: int = Form(default=DEFAULT_MAX_TOKENS),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
     prompt: str = Form(default=DEFAULT_USER_REQUEST),
@@ -867,7 +868,7 @@ async def api_analyze_video_compat(
     video_file: UploadFile | None = File(default=None),
     video_url: str = Form(default=""),
     frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
-    max_tokens: int = Form(default=512),
+    max_tokens: int = Form(default=DEFAULT_MAX_TOKENS),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
     prompt: str = Form(default=DEFAULT_USER_REQUEST),
@@ -892,6 +893,7 @@ def api_config() -> dict[str, Any]:
         "max_model_len": DEFAULT_MAX_MODEL_LEN,
         "hf_token_configured": bool(os.environ.get("HF_TOKEN")),
         "default_frame_count": DEFAULT_FRAME_COUNT,
+        "default_max_tokens": DEFAULT_MAX_TOKENS,
         "max_sample_frames": MAX_SAMPLE_FRAMES,
         "max_batch_videos": MAX_BATCH_VIDEOS,
         "max_upload_bytes": MAX_UPLOAD_BYTES,

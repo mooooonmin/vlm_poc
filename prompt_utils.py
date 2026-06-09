@@ -279,42 +279,11 @@ def normalize_answer_text(answer: str) -> str:
     cleaned_lines = []
     seen_normalized = set()
 
-    # 모델이 내부 프롬프트 문장을 그대로 복사해 답변하는 경우가 있습니다.
-    # 사용자는 내부 규칙을 볼 필요가 없으므로, 화면 표시 전에 이런 줄을 제거합니다.
-    internal_rule_prefixes = (
-        "시간 질문 대응:",
-        "영상 종류 질문 대응:",
-        "시간 질문 전용 지시:",
-        "영상 종류 질문 전용 지시:",
-        "질문 유형:",
-        "질문 유형별 출력 규격:",
-        "공통 규칙:",
-        "답변 형식:",
-        "규칙:",
-        "내부 출력 규격:",
-        "사용자 분석 요청:",
-    )
     for raw_line in answer.splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        if line.startswith(internal_rule_prefixes):
-            continue
-        if "사용자가 '몇 초'" in line or "사용자가 ‘몇 초’" in line:
-            continue
-        if "영상 종류 질문" in line:
-            continue
-        if "질문 유형별 출력 규격" in line:
-            continue
-        if "샘플 프레임에서 직접 보이는 근거만 사용" in line:
-            continue
-        if "사고/충돌/위반" in line:
-            continue
-        if "내부 출력 규격" in line:
-            continue
-        if "사용자 분석" in line or "사용자 分析" in line or "사용자 분析" in line:
-            continue
-        if "분석한 결과" in line or "分析" in line:
+        if is_internal_prompt_artifact(line):
             continue
 
         # "1. 같은 문장", "2. 같은 문장"처럼 번호만 달라진 반복을 제거하기 위해
@@ -330,6 +299,54 @@ def normalize_answer_text(answer: str) -> str:
         else:
             cleaned_lines.append(collapse_repeated_phrases(line))
     return "\n".join(cleaned_lines[:6]) if cleaned_lines else answer.strip()
+
+
+def is_internal_prompt_artifact(line: str) -> bool:
+    """
+    모델이 내부 프롬프트 규칙을 복사한 줄인지 판정합니다.
+
+    Qwen 계열 VLM은 가끔 답변 대신 `답변 형식`, `주의`, `공통 규칙` 같은 지시문을 그대로 출력합니다.
+    이런 줄은 분석 결과가 아니므로 화면에 표시하지 않고, 실제 관찰 문장만 남깁니다.
+    """
+    stripped = line.strip()
+    internal_rule_prefixes = (
+        "시간 질문 대응:",
+        "영상 종류 질문 대응:",
+        "시간 질문 전용 지시:",
+        "영상 종류 질문 전용 지시:",
+        "질문 유형:",
+        "질문 유형별 출력 규격:",
+        "공통 규칙:",
+        "답변 형식:",
+        "규칙:",
+        "내부 출력 규격:",
+        "사용자 분석 요청:",
+        "주의:",
+    )
+    if stripped.startswith(internal_rule_prefixes):
+        return True
+
+    artifact_phrases = (
+        "○○",
+        "또는 답변:",
+        "보임 / 보이지 않음 / 확인 불가",
+        "화면 제목, 자막, 장소, 사물, 행위 중 직접 보이는 단서",
+        "샘플 프레임에서 직접 보이는 근거만 사용",
+        "아무 단서도 없을 때만",
+        "직접 보이는 단서가 있으면",
+        "사고/충돌 영상으로 단정",
+        "사고, 충돌, 위반은 명확한 시각 근거",
+        "운전자 조작 오류, 과속, 신호위반",
+        "'답변:' 줄은 반드시",
+        "'확인 불가'와 구체 답변",
+        "내부 규칙 문장을 답변에 복사",
+        "사용자 분석",
+        "분석한 결과",
+        "같은 문장 반복 금지",
+        "근거 프레임은 필요한 경우",
+        "전체 5줄 이내",
+    )
+    return any(phrase in stripped for phrase in artifact_phrases)
 
 
 def collapse_repeated_phrases(text: str) -> str:
@@ -419,15 +436,46 @@ def refine_video_type_answer(answer: str, user_request: str) -> str:
     lines = consolidate_answer_lines(answer).splitlines()
     if not lines:
         return answer
+    if not any(line.strip().startswith("답변:") for line in lines):
+        inferred = infer_video_type_from_evidence("\n".join(lines))
+        if inferred:
+            return "\n".join([f"답변: {inferred} 영상으로 보입니다.", *lines])
     first_line = lines[0].strip()
     if first_line.startswith("답변:") and "확인 불가" not in first_line and "영상" not in first_line:
         answer_text = first_line.split(":", 1)[1].strip()
         rest = [line for line in lines[1:] if line.strip()]
         return "\n".join([f"답변: {answer_text} 영상으로 보입니다.", *rest])
+    if first_line.startswith("답변:") and "사고 의심" in first_line:
+        rest_text = "\n".join(lines[1:])
+        if any(phrase in rest_text for phrase in ("명확한 시각적 증거는 없음", "명확한 장면은 없음", "일반적인 교통 상황")):
+            rest = [line for line in lines[1:] if line.strip()]
+            return "\n".join(["답변: 고속도로 교통 상황 영상으로 보입니다.", *rest])
     if "○○" not in first_line:
         return "\n".join(lines)
     rest = [line for line in lines[1:] if line.strip()]
     return "\n".join(["답변: 확인 불가", *rest])
+
+
+def infer_video_type_from_evidence(text: str) -> str:
+    """
+    영상 종류 질문에서 모델이 `답변:` 없이 근거만 쓴 경우 보수적인 유형명을 만듭니다.
+
+    새 사실을 만들지 않기 위해 근거 문장에 이미 들어 있는 장소/객체 단어만 사용합니다.
+    """
+    no_clear_incident = any(phrase in text for phrase in ("명확한 시각적 증거는 없음", "명확한 장면은 없음", "일반적인 교통 상황"))
+    if "고속도로" in text and ("충돌" in text or "사고" in text) and not no_clear_incident:
+        return "고속도로 차량 사고 의심"
+    if "교차로" in text and ("충돌" in text or "사고" in text) and not no_clear_incident:
+        return "교차로 차량 사고 의심"
+    if "고속도로" in text:
+        return "고속도로 교통 상황"
+    if "교차로" in text:
+        return "교차로 교통 상황"
+    if "터널" in text:
+        return "터널 교통 상황"
+    if "트럭" in text or "차량" in text:
+        return "차량 주행 상황"
+    return ""
 
 
 def remove_unsupported_cause_claims(answer: str) -> str:
@@ -444,6 +492,7 @@ def remove_unsupported_cause_claims(answer: str) -> str:
     for line in answer.splitlines():
         cleaned = re.sub(rf",?\s*[^.\n。]*{unsupported_terms}[^.\n。]*(?:[.。]|$)", "", line).strip()
         cleaned = re.sub(r"(발생한 것으로|나타난 것으로)$", r"\1 보입니다.", cleaned)
+        cleaned = re.sub(r"일반적인\s+교통\s+상$", "일반적인 교통 상황으로 보입니다.", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
         if cleaned:
             cleaned_lines.append(cleaned)
@@ -451,6 +500,25 @@ def remove_unsupported_cause_claims(answer: str) -> str:
             removed_summary = True
     if removed_summary and cleaned_lines:
         cleaned_lines.insert(0, "요약: 프레임에서 확인되는 주요 장면 변화는 아래와 같습니다.")
+    return "\n".join(cleaned_lines)
+
+
+def remove_conflicting_incident_claims(answer: str) -> str:
+    """
+    같은 답변 안에서 사고 단정과 사고 증거 없음이 동시에 나온 경우 단정 문구를 낮춥니다.
+
+    예: "충돌하는 장면이 나타남"과 "충돌이나 사고의 명확한 시각적 증거는 없음"이 함께 있으면
+    앞의 단정 문구를 제거하고, 보수적인 증거 없음 문장만 남깁니다.
+    """
+    if not any(phrase in answer for phrase in ("명확한 시각적 증거는 없음", "명확한 장면은 없음")):
+        return answer
+
+    cleaned_lines: list[str] = []
+    for line in answer.splitlines():
+        cleaned = re.sub(r"또한\s*[^.\n。]*(충돌|사고)[^.\n。]*(나타나고 있다|보인다|발생)[^.\n。]*(?:[.。]|$)", "", line).strip()
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned:
+            cleaned_lines.append(cleaned)
     return "\n".join(cleaned_lines)
 
 
@@ -480,6 +548,7 @@ def refine_question_specific_answer(answer: str, user_request: str) -> str:
     refined = refine_time_question_answer(refined, user_request)
     refined = refine_video_type_answer(refined, user_request)
     refined = remove_unsupported_cause_claims(refined)
+    refined = remove_conflicting_incident_claims(refined)
     return refined
 
 
