@@ -29,6 +29,22 @@
 | 2026-06-08 | 로컬 API | 임시파일 정리 | - | 성공 | - | `POST /api/tmp/cleanup?dry_run=true`로 정리 대상 확인 |
 | 2026-06-08 | 로컬 API | 생성 로그 정리 | - | 성공 | - | `logs/evaluation/*`, `logs/timeslicing/*`가 dry-run 대상에 포함됨 |
 | 2026-06-08 | 로컬 UI | 대시보드 레이아웃 | - | 성공 | - | 1365x768 headless screenshot 기준 3열 대시보드 확인 |
+| 2026-06-09 | 로컬 Docker/vLLM | `https://youtube.com/shorts/7WQZxMdXbqI` | 4 | 성공 | - | job `1780964816_b92b7798`, 7,206ms, 터널/트럭 장면 요약 |
+| 2026-06-09 | 로컬 Docker/vLLM | `https://youtube.com/shorts/7WQZxMdXbqI` | 6 | 성공 | - | job `1780964816_05cecafb`, 4,414ms, 일부 `확인 불가` 포함 |
+| 2026-06-09 | 로컬 Docker/vLLM | `https://youtu.be/kSW4PKuowYg` | 4 | 성공 | - | job `1780964816_265dde12`, 10,050ms, 응답 반복 문장 발생 |
+| 2026-06-09 | 로컬 Docker/vLLM | `https://youtu.be/kSW4PKuowYg` | 6 | 성공 | - | job `1780964816_249120af`, 8,168ms, 차량/사람 장면 요약 |
+| 2026-06-09 | 로컬 Docker/vLLM | `https://www.youtube.com/watch?v=jNQXAC9IVRw` | 4 | 성공 | - | job `1780964816_66484633`, 4,581ms, 인물 장면 요약 |
+| 2026-06-09 | 로컬 Docker/vLLM | `https://www.youtube.com/watch?v=jNQXAC9IVRw` | 6 | 성공 | - | job `1780964816_61d87cdc`, 3,353ms, 일부 `확인 불가` 포함 |
+
+## 2026-06-09 실제 영상 테스트 메모
+
+| 항목 | 결과 |
+| --- | --- |
+| 로컬 mp4 | 저장소 안에서 테스트 가능한 mp4 파일을 찾지 못해 미수행 |
+| 공개 YouTube URL | 3개 URL, 2개 프레임 조건, 총 6개 job 모두 성공 |
+| 비교한 프레임 수 | `4`, `6` |
+| 관찰된 품질 이슈 | 일부 응답에서 반복 문장 또는 `확인 불가` 혼합 발생 |
+| 다음 보정 방향 | 응답 후처리와 내부 프롬프트에서 반복 문장 억제, 근거 프레임 표기 방식 개선 |
 
 ## 최근 정리 dry-run
 
@@ -59,8 +75,8 @@ Invoke-RestMethod -Uri http://localhost:8000/v1/models
 
 | 항목 | 목적 |
 | --- | --- |
-| 실제 mp4 3~5개 | synthetic 영상이 아닌 실제 영상 품질 확인 |
-| 공개 YouTube URL 3~5개 | `yt-dlp` 다운로드 안정성 확인 |
-| frame count `4`, `6`, `8` 비교 | 정확도와 처리시간 균형 확인 |
+| 실제 mp4 3~5개 | 테스트 영상 파일 확보 후 품질 확인 |
+| 공개 YouTube URL 3~5개 | 3개 URL은 `4`, `6` 프레임 조건으로 1차 확인 완료. `8` 프레임 조건 추가 비교 필요 |
+| frame count `4`, `6`, `8` 비교 | `4`, `6`은 1차 확인 완료. `8` 추가 비교 필요 |
 | 긴 영상 입력 | 영상 길이 제한과 샘플링 안정성 확인 |
 | Linux/Kubernetes GPU node | time-slicing 실제 적용 확인 |
