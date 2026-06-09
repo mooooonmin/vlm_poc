@@ -1,77 +1,72 @@
 # 아키텍처 개요
 
-이 PoC는 FastAPI 앱, Docker vLLM 서버, 파일 기반 job 저장소로 구성됩니다.
+이 PoC는 FastAPI 앱, 파일 기반 대화/job 저장소, Docker vLLM 서버로 구성됩니다.
 
-## 전체 흐름
+## 처리 흐름
 
 ```text
 브라우저
-  -> FastAPI app.py
-  -> 영상 저장 또는 YouTube 다운로드
-  -> OpenCV 구간 대표 프레임 추출
-  -> 프레임 JPEG base64 변환
+  -> 대화 생성
+  -> 영상 파일 또는 URL 등록
+  -> 질문 전송
+  -> conversation API가 내부 job 생성
+  -> dispatcher가 ready vLLM worker에 job 배정
+  -> OpenCV 프레임 추출
   -> vLLM OpenAI 호환 API 호출
-  -> 응답 후처리
-  -> tmp/jobs/{job_id}/job.json 저장
-  -> 화면에 영상 미리보기, 프레임, 답변 표시
+  -> job.json 저장
+  -> conversation 메시지에 답변 상태 반영
+  -> 화면 polling으로 채팅 답변 갱신
 ```
 
 ## 주요 구성
 
 | 구성 | 역할 |
 | --- | --- |
-| `app.py` | FastAPI 서버, job 생성, dispatcher, API 라우트 |
-| `video_utils.py` | 업로드 저장, URL 다운로드, OpenCV 구간 대표 프레임/1fps 추출 |
-| `prompt_utils.py` | 질문 유형 분류, vLLM payload 생성, 응답 후처리 |
+| `app.py` | FastAPI 서버, conversation API, job API, dispatcher |
+| `conversation_store.py` | 채팅 세션과 메시지를 `tmp/conversations`에 저장 |
+| `job_store.py` | 분석 job 상태, 결과, 로그 경로, 임시파일 정리 |
+| `video_utils.py` | 업로드 저장, YouTube/URL 다운로드, OpenCV 프레임 추출 |
+| `prompt_utils.py` | 내부 프롬프트, vLLM payload, 답변 후처리 |
 | `runtime_utils.py` | CUDA 확인, Docker vLLM 시작/종료, time-slicing 로그 |
-| `worker_registry.py` | vLLM worker readiness와 job 배정 상태 관리 |
-| `job_store.py` | job 상태 저장, 통계, 임시파일 정리 |
-| `templates/`, `static/` | 테스트 UI |
-
-## job 처리 방식
-
-분석 요청은 즉시 최종 결과를 반환하지 않고 job으로 등록됩니다.
-
-1. API가 job을 생성하고 `queued` 상태로 저장합니다.
-2. dispatcher thread가 ready 상태의 vLLM worker를 찾습니다.
-3. worker가 배정되면 job은 `running` 상태가 됩니다.
-4. 프레임 추출과 vLLM 요청이 끝나면 `done` 또는 `failed`로 바뀝니다.
-5. 화면은 job 또는 batch API를 polling해 상태를 갱신합니다.
+| `worker_registry.py` | vLLM worker readiness와 job 배정 상태 |
+| `templates/index.html` | 채팅형 관제 UI HTML |
+| `static/app.js` | 대화 목록, 영상 등록, 질문 전송, polling |
+| `static/style.css` | 밝은 관제형 4영역 레이아웃 |
 
 ## 저장 경로
 
 | 경로 | 내용 |
 | --- | --- |
-| `tmp/jobs/{job_id}/` | 업로드/다운로드 영상, `job.json` |
-| `tmp/frames/` | 화면 미리보기와 vLLM 요청에 사용한 추출 프레임 |
-| `logs/evaluation/{run_id}/` | 평가 러너 리포트 |
-| `logs/timeslicing/{run_id}/` | Kubernetes/time-slicing 검증 리포트 |
+| `tmp/conversations/{conversation_id}/conversation.json` | 대화 제목, 영상 source, 메시지, 연결 job 목록 |
+| `tmp/jobs/{job_id}/job.json` | 프레임, 답변, 실패 원인, worker, 처리 시간 |
+| `tmp/frames/` | 화면 미리보기와 vLLM 요청에 사용한 JPEG 프레임 |
+| `logs/timeslicing/{run_id}/` | Kubernetes time-slicing 검증 리포트 |
+| `logs/evaluation/{run_id}/` | 평가 실행 리포트 |
 
-`tmp/`와 `logs/`의 자동 생성 파일은 임시파일 정리 대상입니다. `docs/TEST_RESULTS.md`는 사람이 관리하는 검증 문서라 삭제 대상이 아닙니다.
+## conversation과 job의 관계
 
-## 영상 미리보기
+대화 세션은 사용자 경험 단위입니다. 한 대화에는 영상 1개만 연결합니다.
 
-업로드 파일과 URL에서 다운로드된 영상은 `tmp/jobs/{job_id}/input.*` 형태로 저장됩니다. 화면은 `/api/jobs/{job_id}/video`를 통해 해당 job 폴더 안의 영상만 미리보기로 표시합니다. `tmp` 전체를 정적 경로로 공개하지 않고, job에 기록된 영상 경로가 해당 job 폴더 내부일 때만 반환합니다.
+job은 실제 분석 실행 단위입니다. 같은 대화에서 질문을 여러 번 보내면 질문마다 새로운 job이 생성되고, assistant 메시지의 `job_id`로 연결됩니다.
 
-## vLLM 사용 방식
+이 구조를 쓰는 이유:
 
-FastAPI 앱은 모델을 직접 로드하지 않습니다. 화면의 `vLLM 시작 / GPU 점유` 버튼은 Docker 컨테이너를 시작하고, 앱은 `VLLM_ENDPOINT`로 HTTP 요청을 보냅니다.
+- 같은 영상에 대해 여러 질문을 이어서 테스트할 수 있습니다.
+- 질문별 실패 원인과 프레임 근거를 job 단위로 분리해 볼 수 있습니다.
+- 기존 `/api/jobs/*` 흐름을 유지하면서 새 채팅 UI를 추가할 수 있습니다.
 
-이렇게 분리하는 이유:
-- 앱 서버 오류와 GPU 추론 서버 오류를 구분하기 쉽습니다.
-- vLLM 로그를 Docker 로그로 따로 확인할 수 있습니다.
-- 향후 여러 vLLM endpoint를 worker로 등록할 수 있습니다.
+## vLLM worker 구조
 
-## time-slicing 위치
+로컬 기본값은 `http://localhost:8000/v1/chat/completions` worker 1개입니다. `VLLM_WORKERS` 환경변수에 여러 endpoint를 넣으면 dispatcher가 ready 상태 worker에 job을 배정할 수 있습니다.
 
-time-slicing은 로컬 Windows 기능이 아닙니다. Kubernetes GPU node에서 NVIDIA device-plugin이 GPU 리소스를 oversubscribe하도록 설정하는 영역입니다.
+Kubernetes time-slicing은 worker를 자동으로 나누지 않습니다. time-slicing은 GPU 접근 슬롯을 oversubscribe하는 클러스터 설정이고, 어떤 요청을 어느 vLLM endpoint로 보낼지는 이 앱의 dispatcher가 담당합니다.
 
-현재 저장소의 범위:
-- `k8s/`에 적용 초안 제공
-- `/api/timeslicing/logs`로 검증 로그 수집
-- `VLLM_WORKERS`로 여러 vLLM endpoint 등록 준비
+## 현재 한계
 
-아직 완료되지 않은 범위:
-- 실제 Linux/Kubernetes GPU node에서 time-slicing 적용
-- vLLM Pod 2개 이상 실부하 검증
-- GPU OOM/처리량 기준 확정
+| 항목 | 상태 |
+| --- | --- |
+| 운영 DB | 미사용. 파일 기반 저장소 |
+| 사용자 인증 | 미구현 |
+| 실시간 스트림/RTSP | 미구현 |
+| 다중 영상 비교 | 미구현. 한 대화는 영상 1개 기준 |
+| Kubernetes time-slicing 실검증 | Linux/K8s GPU node 필요 |

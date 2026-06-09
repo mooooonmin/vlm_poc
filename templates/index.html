@@ -7,167 +7,154 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-  <main>
-    <header class="page-header">
-      <div>
-        <h1>영상 VLM 분석 PoC</h1>
+  <main class="app-shell">
+    <aside class="app-nav" aria-label="주요 메뉴">
+      <div class="brand">
+        <strong>VLM</strong>
+        <span>PoC</span>
       </div>
-    </header>
+      <nav>
+        <button type="button" class="nav-item active" data-panel="analysis">분석</button>
+        <button type="button" class="nav-item" data-panel="runtime">런타임</button>
+        <button type="button" class="nav-item" data-panel="logs">로그</button>
+      </nav>
+    </aside>
 
-    <section class="runtime-panel">
-      <div class="runtime-top">
+    <aside class="conversation-sidebar">
+      <div class="panel-header">
         <div>
-          <h2>런타임 상태</h2>
-          <div id="runtimeStatus" class="status">아직 확인하지 않았습니다.</div>
+          <h1>영상 분석</h1>
+          <p>영상 1개를 등록하고 질문을 이어서 합니다.</p>
         </div>
-        <div class="button-row compact-actions">
-          <button type="button" onclick="refreshRuntime()">상태 새로고침</button>
-          <button type="button" onclick="startVllm()">vLLM 시작 / GPU 점유</button>
-          <button type="button" class="danger" onclick="stopVllm()">vLLM 종료 / GPU 해제</button>
+        <button type="button" id="newConversationBtn">새 대화</button>
+      </div>
+      <div id="conversationList" class="conversation-list"></div>
+    </aside>
+
+    <section class="chat-panel">
+      <header class="chat-header">
+        <div>
+          <h2 id="conversationTitle">대화를 선택하세요</h2>
+          <p id="conversationMeta">새 대화를 만들고 영상을 등록하면 질문할 수 있습니다.</p>
+        </div>
+        <div id="runtimeBadges" class="badges"></div>
+      </header>
+
+      <div id="chatMessages" class="chat-messages">
+        <div class="empty-state">
+          <strong>분석할 영상을 먼저 등록하세요.</strong>
+          <span>오른쪽 패널에서 파일 또는 YouTube URL을 넣은 뒤 질문을 보내면 됩니다.</span>
         </div>
       </div>
-      <div id="runtimeBadges" class="badges"></div>
-      <details class="runtime-detail compact-detail">
-        <summary>상세 도구</summary>
-        <div class="button-row detail-actions">
-          <button type="button" class="secondary" onclick="loadVllmLogs()">vLLM 로그</button>
-          <button type="button" class="secondary" onclick="refreshWorkers()">Worker 새로고침</button>
-          <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그</button>
-        </div>
-        <div id="workerPanel" class="check-panel"></div>
-        <div id="timeslicingResult" class="check-panel"></div>
-        <div id="vllmLogPanel" class="log-panel"></div>
-        <details>
-          <summary>원본 상태 JSON</summary>
-          <pre id="runtimeDetail"></pre>
-        </details>
-      </details>
+
+      <form id="chatForm" class="chat-compose">
+        <textarea id="chatPrompt" name="prompt" placeholder="예: 이 영상에서 사고가 언제 발생했어?"></textarea>
+        <button id="sendMessageBtn" type="submit">질문 보내기</button>
+      </form>
     </section>
 
-    <div class="dashboard-grid">
-      <section class="input-panel">
-        <h2>영상 입력</h2>
-        <form id="analyzeForm" action="/api/jobs/video-batch" method="post" enctype="multipart/form-data">
-          <div class="batch-inputs">
-            <div class="video-slot">
-              <strong>영상 1</strong>
-              <div class="field">
-                <label for="videoFile1">영상 파일</label>
-                <input id="videoFile1" name="video_file_1" type="file" accept="video/*" />
-              </div>
-              <div class="field">
-                <label for="videoUrl1">영상 URL</label>
-                <input id="videoUrl1" name="video_url_1" placeholder="https://youtu.be/..." />
-              </div>
-            </div>
-            <div class="video-slot">
-              <strong>영상 2</strong>
-              <div class="field">
-                <label for="videoFile2">영상 파일</label>
-                <input id="videoFile2" name="video_file_2" type="file" accept="video/*" />
-              </div>
-              <div class="field">
-                <label for="videoUrl2">영상 URL</label>
-                <input id="videoUrl2" name="video_url_2" placeholder="https://youtu.be/..." />
-              </div>
-            </div>
-            <div class="video-slot">
-              <strong>영상 3</strong>
-              <div class="field">
-                <label for="videoFile3">영상 파일</label>
-                <input id="videoFile3" name="video_file_3" type="file" accept="video/*" />
-              </div>
-              <div class="field">
-                <label for="videoUrl3">영상 URL</label>
-                <input id="videoUrl3" name="video_url_3" placeholder="https://youtu.be/..." />
-              </div>
-            </div>
-            <div class="hint">각 슬롯은 파일 또는 URL 중 하나만 입력합니다. 둘 다 입력하면 파일을 우선합니다. 입력된 슬롯만 job으로 생성됩니다.</div>
+    <aside class="video-panel">
+      <section class="video-card">
+        <div class="panel-header compact">
+          <div>
+            <h2>영상</h2>
+            <p id="videoSourceStatus">등록된 영상이 없습니다.</p>
           </div>
-          <div class="row">
-            <div class="field">
-              <div class="field-label-row">
-                <label for="samplingMode">샘플링 방식</label>
-                <span class="range-note">기본</span>
-              </div>
-              <select id="samplingMode" name="sampling_mode">
-                <option value="segment" selected>구간 프레임</option>
-                <option value="one_fps">1fps</option>
-              </select>
-            </div>
-            <div class="field">
-              <div class="field-label-row">
-                <label for="frameCount">최대 프레임 수</label>
-                <span class="range-note">1~120</span>
-              </div>
-              <input id="frameCount" name="frame_count" type="number" min="1" max="120" value="30" />
-            </div>
-            <div class="field">
-              <div class="field-label-row">
-                <label for="maxTokens">최대 토큰</label>
-                <span class="range-note">64~2048</span>
-              </div>
-              <input id="maxTokens" name="max_tokens" type="number" min="64" max="2048" value="1024" />
-            </div>
-          </div>
-          <details class="advanced-settings">
-            <summary>모델 / 엔드포인트 설정</summary>
-            <div class="row">
-              <div class="field">
-                <label for="modelId">사용 모델</label>
-                <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" disabled aria-disabled="true" />
-              </div>
-              <div class="field">
-                <label for="endpoint">vLLM 엔드포인트</label>
-                <input id="endpoint" name="endpoint" value="http://localhost:8000/v1/chat/completions" />
-              </div>
-            </div>
-          </details>
-          <div class="field">
-            <label for="prompt">분석 요청</label>
-            <textarea id="prompt" name="prompt">이 영상에서 발생한 주요 상황을 시간 순서대로 요약해줘.</textarea>
-          </div>
-          <button id="analyzeBtn" type="submit">영상 분석 batch 생성</button>
-          <div id="analyzeStatus" class="status"></div>
+          <button type="button" class="secondary" onclick="cleanupTmpFiles()">임시파일 정리</button>
+        </div>
+
+        <form id="videoForm" class="video-form" enctype="multipart/form-data">
+          <label for="conversationVideoFile">파일 업로드</label>
+          <input id="conversationVideoFile" name="video_file" type="file" accept="video/*" />
+
+          <label for="conversationVideoUrl">영상 URL</label>
+          <input id="conversationVideoUrl" name="video_url" placeholder="https://youtu.be/..." />
+
+          <button id="saveVideoBtn" type="submit">영상 등록</button>
         </form>
+
+        <div id="videoPreview" class="video-preview empty">아직 미리보기 가능한 영상이 없습니다.</div>
       </section>
 
-      <section class="result-panel">
-        <h2>분석 결과</h2>
-        <div id="jobStatus" class="status">아직 분석 작업이 없습니다.</div>
-        <div id="batchPanel" class="batch-panel"></div>
-        <div class="field">
-          <label>영상 미리보기</label>
-          <div id="videoPreview" class="video-preview empty">아직 미리보기 가능한 영상이 없습니다.</div>
+      <section class="video-card">
+        <h2>분석 설정</h2>
+        <div class="settings-grid">
+          <div class="field">
+            <div class="field-label-row">
+              <label for="samplingMode">샘플링</label>
+              <span class="range-note">기본</span>
+            </div>
+            <select id="samplingMode" name="sampling_mode">
+              <option value="segment" selected>구간 프레임</option>
+              <option value="one_fps">1fps</option>
+            </select>
+          </div>
+          <div class="field">
+            <div class="field-label-row">
+              <label for="frameCount">최대 프레임</label>
+              <span class="range-note">1~120</span>
+            </div>
+            <input id="frameCount" name="frame_count" type="number" min="1" max="120" value="30" />
+          </div>
+          <div class="field">
+            <div class="field-label-row">
+              <label for="maxTokens">최대 토큰</label>
+              <span class="range-note">64~2048</span>
+            </div>
+            <input id="maxTokens" name="max_tokens" type="number" min="64" max="2048" value="1024" />
+          </div>
         </div>
-        <div class="field">
-          <label>추출 프레임</label>
-          <div id="frames" class="cards"></div>
-        </div>
-        <div class="field">
-          <label>VLM 응답</label>
-          <div id="answer" class="answer-box">아직 분석하지 않았습니다.</div>
-        </div>
+
+        <details class="advanced-settings">
+          <summary>모델 / 엔드포인트</summary>
+          <div class="field">
+            <label for="modelId">사용 모델</label>
+            <input id="modelId" name="model_id" value="Qwen/Qwen3-VL-2B-Instruct" disabled aria-disabled="true" />
+          </div>
+          <div class="field">
+            <label for="endpoint">vLLM 엔드포인트</label>
+            <input id="endpoint" name="endpoint" value="http://localhost:8000/v1/chat/completions" />
+          </div>
+        </details>
+      </section>
+
+      <section class="video-card evidence-card">
+        <h2>근거 프레임</h2>
+        <div id="frames" class="cards"></div>
         <div id="jobLogPath" class="log-path"></div>
       </section>
 
-      <section class="side-panel">
-        <h2>최근 작업</h2>
-        <div class="button-row side-actions">
-          <button type="button" class="danger" onclick="cleanupTmpFiles()">임시파일 정리</button>
-        </div>
-        <div id="jobStats" class="stats-panel"></div>
-          <div id="jobList" class="job-list"></div>
-        <details class="report-detail">
-          <summary>평가 리포트</summary>
-          <div class="button-row">
-            <button type="button" class="secondary" onclick="refreshEvaluations()">새로고침</button>
+      <section id="runtimePanel" class="video-card utility-panel">
+        <div class="panel-header compact">
+          <div>
+            <h2>런타임</h2>
+            <p id="runtimeStatus">상태를 확인 중입니다.</p>
           </div>
-          <div id="evaluationList" class="evaluation-list"></div>
+        </div>
+        <div class="button-row">
+          <button type="button" onclick="refreshRuntime()">상태 새로고침</button>
+          <button type="button" onclick="startVllm()">vLLM 시작</button>
+          <button type="button" class="danger" onclick="stopVllm()">vLLM 종료</button>
+        </div>
+        <div id="workerPanel" class="check-panel"></div>
+      </section>
+
+      <section id="logPanel" class="video-card utility-panel">
+        <h2>로그 / 설정</h2>
+        <div class="button-row">
+          <button type="button" class="secondary" onclick="loadVllmLogs()">vLLM 로그</button>
+          <button type="button" class="secondary" onclick="collectTimeslicingLogs()">Time-slicing 로그</button>
+        </div>
+        <div id="timeslicingResult" class="check-panel"></div>
+        <div id="vllmLogPanel" class="log-panel"></div>
+        <details class="raw-detail">
+          <summary>원본 상태 JSON</summary>
+          <pre id="runtimeDetail"></pre>
         </details>
       </section>
-    </div>
+    </aside>
   </main>
+
   <div id="framePreviewModal" class="frame-modal" aria-hidden="true">
     <div class="frame-modal-backdrop" data-frame-close="true"></div>
     <div class="frame-modal-panel" role="dialog" aria-modal="true" aria-labelledby="framePreviewTitle">
@@ -179,6 +166,7 @@
       <div id="framePreviewCaption" class="frame-modal-caption"></div>
     </div>
   </div>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

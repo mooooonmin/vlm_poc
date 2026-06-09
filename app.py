@@ -14,6 +14,7 @@ import json
 import hashlib
 import os
 import queue
+import shutil
 import socket
 import threading
 import time
@@ -28,6 +29,16 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from conversation_store import (
+    add_message,
+    append_job_id,
+    create_conversation,
+    get_conversation,
+    list_conversations,
+    load_existing_conversations,
+    set_conversation_video,
+    update_message,
+)
 from job_store import cleanup_finished_jobs, create_job, get_job, get_job_stats, list_batch_jobs, list_jobs, load_existing_jobs, update_job
 from prompt_utils import (
     DEFAULT_USER_REQUEST,
@@ -94,6 +105,7 @@ KOREAN_MIN_RATIO = float(os.environ.get("KOREAN_MIN_RATIO", "0.2"))
 
 FRAME_DIR.mkdir(parents=True, exist_ok=True)
 load_existing_jobs(TMP_DIR)
+load_existing_conversations(TMP_DIR)
 
 
 app = FastAPI(title="Video VLM Analysis PoC")
@@ -760,6 +772,138 @@ async def create_video_job_from_form(
     return get_job(job["job_id"]) or job
 
 
+async def save_conversation_video_source(
+    conversation_id: str,
+    video_file: UploadFile | None,
+    video_url: str,
+) -> dict[str, Any]:
+    """
+    채팅 세션에 연결할 영상 source를 저장합니다.
+
+    업로드 파일은 conversation 폴더에 먼저 저장합니다. 질문을 보낼 때는 이 파일을
+    job 폴더로 복사해 기존 job 미리보기 API(`/api/jobs/{job_id}/video`)와 호환되게 합니다.
+    URL은 실제 질문 job이 생성될 때 다운로드하므로 여기서는 URL 문자열만 저장합니다.
+    """
+    has_upload = bool(video_file and video_file.filename)
+    has_url = bool(video_url.strip())
+    if not has_upload and not has_url:
+        raise HTTPException(status_code=400, detail="영상 파일 또는 영상 URL을 먼저 등록하세요.")
+
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="대화 세션을 찾을 수 없습니다.")
+
+    if has_upload:
+        conversation_dir = Path(str(conversation["conversation_dir"]))
+        saved_path = await save_upload_file(video_file, conversation_dir, max_bytes=MAX_UPLOAD_BYTES)
+        source = {
+            "type": "upload",
+            "name": video_file.filename,
+            "path": str(saved_path),
+            "size_bytes": saved_path.stat().st_size,
+        }
+    else:
+        source = {"type": "url", "url": video_url.strip(), "name": video_url.strip()}
+
+    set_conversation_video(conversation_id, source)
+    return source
+
+
+def create_video_job_from_conversation(
+    conversation: dict[str, Any],
+    prompt: str,
+    frame_count: int,
+    max_tokens: int,
+    model_id: str,
+    endpoint: str,
+    sampling_mode: str,
+) -> dict[str, Any]:
+    """
+    대화 세션의 영상 source와 사용자 질문을 기존 분석 job으로 변환합니다.
+
+    채팅 UI는 대화와 메시지를 관리하지만 실제 영상 분석은 기존 dispatcher/vLLM 흐름을
+    그대로 사용합니다. 이렇게 분리하면 기존 job API를 깨지 않고 채팅 화면만 추가할 수 있습니다.
+    """
+    source = dict(conversation.get("source") or {})
+    if not source:
+        raise HTTPException(status_code=400, detail="먼저 이 대화에 분석할 영상을 등록하세요.")
+
+    validate_analysis_inputs(
+        None,
+        source.get("url") or source.get("name") or "uploaded-video",
+        frame_count,
+        max_tokens,
+        sampling_mode,
+    )
+
+    settings = {
+        "frame_count": frame_count,
+        "sampling_mode": sampling_mode,
+        "segment_seconds": DEFAULT_SEGMENT_SECONDS,
+        "frames_per_segment": DEFAULT_FRAMES_PER_SEGMENT,
+        "max_tokens": max_tokens,
+        "model_id": model_id,
+        "endpoint": endpoint,
+        "prompt": prompt,
+        "conversation_id": conversation.get("conversation_id"),
+    }
+    job = create_job(TMP_DIR, source=source, settings=settings)
+
+    if source.get("type") == "upload":
+        original_path = Path(str(source.get("path") or "")).resolve()
+        if not original_path.exists() or not original_path.is_file():
+            raise HTTPException(status_code=404, detail="등록된 업로드 영상 파일을 찾을 수 없습니다.")
+        job_dir = Path(str(job["job_dir"])).resolve()
+        target_path = job_dir / original_path.name
+        shutil.copy2(original_path, target_path)
+        source["path"] = str(target_path)
+        source["size_bytes"] = target_path.stat().st_size
+        update_job(job["job_id"], source=source, message="대화에 등록된 업로드 영상을 job 폴더로 복사했습니다.")
+    else:
+        update_job(job["job_id"], message="대화에 등록된 URL 영상 분석 job을 대기열에 넣었습니다.")
+
+    update_job(job["job_id"], queued_at=time.strftime("%Y-%m-%d %H:%M:%S"))
+    enqueue_analysis_job(job["job_id"])
+    return get_job(job["job_id"]) or job
+
+
+def sync_conversation_jobs(conversation: dict[str, Any]) -> dict[str, Any]:
+    """
+    연결된 job 상태를 assistant 메시지에 반영합니다.
+
+    화면은 conversation만 polling하므로, assistant 메시지의 `status/content`가 job 상태와
+    맞아야 합니다. job이 끝났으면 답변 또는 실패 원인을 메시지에 저장합니다.
+    """
+    conversation_id = str(conversation.get("conversation_id"))
+    changed = False
+    for message in conversation.get("messages") or []:
+        if message.get("role") != "assistant" or not message.get("job_id"):
+            continue
+        job = get_job(str(message["job_id"]))
+        if not job:
+            continue
+
+        next_status = job.get("status")
+        next_content = message.get("content") or ""
+        if next_status == "done":
+            next_content = job.get("answer") or "분석 결과가 비어 있습니다."
+        elif next_status == "failed":
+            next_content = job.get("failure_reason") or job.get("message") or "분석에 실패했습니다."
+        elif next_status in {"queued", "running"}:
+            next_content = "분석 중입니다. 잠시만 기다려 주세요."
+
+        if message.get("status") != next_status or message.get("content") != next_content:
+            update_message(
+                conversation_id,
+                str(message["message_id"]),
+                status=next_status,
+                content=next_content,
+            )
+            changed = True
+
+    return get_conversation(conversation_id) if changed else conversation
+
+
 def _has_video_input(video_file: UploadFile | None, video_url: str) -> bool:
     """파일 또는 URL 중 하나라도 입력됐는지 확인합니다."""
     return bool(video_file and video_file.filename) or bool(video_url.strip())
@@ -911,6 +1055,110 @@ def api_stop_vllm() -> dict[str, Any]:
 
 # 영상 분석 job 생성 API입니다.
 # `/api/jobs/video-batch`가 현재 화면의 기본 경로이고, `/api/jobs/video`는 단일 영상 요청용입니다.
+# 채팅형 영상 분석 API입니다.
+# 대화 세션은 영상 1개를 기준으로 하며, 같은 영상에 대해 여러 질문을 이어서 보낼 수 있습니다.
+@app.get("/api/conversations")
+def api_list_conversations(limit: int = 50) -> dict[str, Any]:
+    """최근 대화 세션 목록을 반환합니다."""
+    return {"conversations": list_conversations(limit=limit)}
+
+
+@app.post("/api/conversations")
+def api_create_conversation(title: str = Form(default="")) -> dict[str, Any]:
+    """새 채팅 세션을 생성합니다."""
+    return create_conversation(TMP_DIR, title=title)
+
+
+@app.get("/api/conversations/{conversation_id}")
+def api_get_conversation(conversation_id: str) -> dict[str, Any]:
+    """대화 상세와 연결 job 상태를 함께 반환합니다."""
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="대화 세션을 찾을 수 없습니다.")
+    conversation = sync_conversation_jobs(conversation)
+    jobs = [get_job(job_id) for job_id in (conversation.get("job_ids") or [])]
+    conversation["jobs"] = [job for job in jobs if job]
+    return conversation
+
+
+@app.post("/api/conversations/{conversation_id}/video")
+async def api_set_conversation_video(
+    conversation_id: str,
+    video_file: UploadFile | None = File(default=None),
+    video_url: str = Form(default=""),
+) -> dict[str, Any]:
+    """대화 세션에 분석 대상 영상 파일 또는 URL을 등록합니다."""
+    await save_conversation_video_source(conversation_id, video_file, video_url)
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="대화 세션을 찾을 수 없습니다.")
+    return conversation
+
+
+@app.post("/api/conversations/{conversation_id}/messages")
+def api_create_conversation_message(
+    conversation_id: str,
+    prompt: str = Form(default=DEFAULT_USER_REQUEST),
+    frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
+    sampling_mode: str = Form(default=DEFAULT_SAMPLING_MODE),
+    max_tokens: int = Form(default=DEFAULT_MAX_TOKENS),
+    model_id: str = Form(default=DEFAULT_MODEL_ID),
+    endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
+) -> dict[str, Any]:
+    """
+    사용자 질문을 저장하고 내부 분석 job을 생성합니다.
+
+    응답은 즉시 반환됩니다. 실제 vLLM 분석은 background dispatcher가 처리하고,
+    화면은 `/api/conversations/{conversation_id}` 또는 메시지 조회 API를 polling합니다.
+    """
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="대화 세션을 찾을 수 없습니다.")
+    if not (conversation.get("source") or {}):
+        raise HTTPException(status_code=400, detail="먼저 영상을 등록하세요.")
+
+    cleaned_prompt = prompt.strip() or DEFAULT_USER_REQUEST
+    user_message = add_message(conversation_id, "user", cleaned_prompt, status="done")
+    job = create_video_job_from_conversation(
+        conversation,
+        cleaned_prompt,
+        frame_count,
+        max_tokens,
+        model_id,
+        endpoint,
+        sampling_mode,
+    )
+    assistant_message = add_message(
+        conversation_id,
+        "assistant",
+        "분석 중입니다. 잠시만 기다려 주세요.",
+        status=job.get("status") or "queued",
+        job_id=job["job_id"],
+    )
+    append_job_id(conversation_id, job["job_id"])
+    conversation = get_conversation(conversation_id)
+    return {
+        "conversation": conversation,
+        "user_message": user_message,
+        "assistant_message": assistant_message,
+        "job": job,
+    }
+
+
+@app.get("/api/conversations/{conversation_id}/messages/{message_id}")
+def api_get_conversation_message(conversation_id: str, message_id: str) -> dict[str, Any]:
+    """메시지 1개의 상태와 연결 job을 반환합니다."""
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="대화 세션을 찾을 수 없습니다.")
+    conversation = sync_conversation_jobs(conversation)
+    for message in conversation.get("messages") or []:
+        if message.get("message_id") == message_id:
+            job = get_job(str(message.get("job_id"))) if message.get("job_id") else None
+            return {"message": message, "job": job}
+    raise HTTPException(status_code=404, detail="메시지를 찾을 수 없습니다.")
+
+
 @app.post("/api/jobs/video")
 async def api_create_video_job(
     video_file: UploadFile | None = File(default=None),

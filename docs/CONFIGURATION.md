@@ -1,103 +1,61 @@
 # 설정 가이드
 
-환경변수는 앱 시작 전에 PowerShell에서 설정하거나 `.env.example`을 참고해 별도 환경 로딩 방식으로 관리합니다. 현재 코드는 `.env` 파일을 자동 로드하지 않으므로, 필요한 값은 실행 쉘 환경에 직접 설정해야 합니다.
+이 문서는 화면과 런타임에서 사용하는 주요 설정값을 정리합니다.
 
-## 앱 서버
-
-| 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `APP_HOST` | `127.0.0.1` | FastAPI 바인딩 host |
-| `APP_PORT` | `8080` | FastAPI 시작 포트. 사용 중이면 다음 빈 포트 사용 |
-
-예:
-
-```powershell
-$env:APP_PORT="8090"
-python app.py
-```
-
-## vLLM 모델과 endpoint
+## 기본 환경변수
 
 | 변수 | 기본값 | 설명 |
 | --- | --- | --- |
-| `MODEL_ID` | `Qwen/Qwen3-VL-2B-Instruct` | vLLM이 로드할 모델 |
-| `VLLM_ENDPOINT` | `http://localhost:8000/v1/chat/completions` | 분석 요청 endpoint |
-| `VLLM_MODELS_ENDPOINT` | `http://localhost:8000/v1/models` | readiness 확인 endpoint |
-| `HF_TOKEN` | 없음 | Hugging Face 인증 토큰 |
-| `HF_HOME` | 사용자 홈의 `.cache/huggingface` | 모델 cache mount 위치 |
+| `APP_HOST` | `127.0.0.1` | FastAPI 바인딩 주소 |
+| `APP_PORT` | `8080` | FastAPI 기본 포트 |
+| `DEFAULT_SAMPLING_MODE` | `segment` | 기본 프레임 샘플링 방식 |
+| `DEFAULT_MAX_TOKENS` | `1024` | vLLM 응답 최대 토큰 |
+| `MAX_SAMPLE_FRAMES` | `120` | 화면과 job에 저장할 최대 추출 프레임 수 |
+| `MAX_VLLM_INPUT_FRAMES` | `30` | vLLM에 기본 전송할 최대 프레임 수 |
+| `MAX_VLLM_INPUT_FRAMES_MID_TOKEN` | `32` | `max_tokens <= 768`일 때 전송 상한 |
+| `MAX_VLLM_INPUT_FRAMES_LOW_TOKEN` | `36` | `max_tokens <= 512`일 때 전송 상한 |
+| `MAX_UPLOAD_BYTES` | `1073741824` | 업로드 파일 최대 크기 |
+| `MAX_VIDEO_DURATION_SEC` | `1800` | 분석 대상 영상 길이 제한 |
+| `VLLM_WORKERS` | 미설정 | 여러 vLLM endpoint를 쉼표로 등록 |
 
-기본 모델을 바꾸면 이미 실행 중인 vLLM 컨테이너도 같은 모델로 다시 시작해야 합니다.
+## 화면 입력 범위
 
-## Docker vLLM
+| 항목 | 범위 | 기본값 |
+| --- | ---: | ---: |
+| 최대 프레임 수 | `1~120` | `30` |
+| 최대 토큰 | `64~2048` | `1024` |
+| 샘플링 방식 | `segment`, `one_fps` | `segment` |
 
-| 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `CONTAINER_NAME` | `vlm-vllm-qwen` | 시작/종료할 Docker 컨테이너 이름 |
-| `VLLM_IMAGE` | `vllm/vllm-openai:latest` | vLLM Docker 이미지 |
-| `GPU_MEMORY_UTILIZATION` | `0.85` | vLLM GPU 메모리 사용 목표 비율 |
-| `MAX_MODEL_LEN` | `8192` | vLLM 최대 컨텍스트 길이 |
+## 추출 프레임과 vLLM 전송 프레임
 
-RTX 4070 Ti에서 OOM이 발생하면 우선 아래처럼 낮춰 테스트합니다.
+화면에는 최대 `MAX_SAMPLE_FRAMES`만큼 프레임을 추출해 보여줄 수 있습니다. 하지만 모든 프레임을 vLLM에 보내면 모델 context length를 초과할 수 있습니다. 그래서 vLLM 전송 프레임 수는 별도 상한을 사용합니다.
 
-```powershell
-$env:MAX_MODEL_LEN="4096"
-$env:GPU_MEMORY_UTILIZATION="0.80"
-python app.py
-```
-
-## 영상 입력 제한
-
-| 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `MAX_UPLOAD_BYTES` | `1073741824` | 업로드 파일 최대 크기, 기본 1GB |
-| `MAX_VIDEO_DURATION_SEC` | `1800` | 분석 허용 영상 길이, 기본 30분 |
-| `MAX_SAMPLE_FRAMES` | `120` | 분석용으로 추출할 최대 프레임 수 |
-| `MAX_VLLM_INPUT_FRAMES` | `30` | vLLM에 한 번에 전송할 최대 대표 프레임 수 |
-| `MAX_VLLM_INPUT_FRAMES_MID_TOKEN` | `32` | `max_tokens <= 768`일 때 전송할 대표 프레임 수 |
-| `MAX_VLLM_INPUT_FRAMES_LOW_TOKEN` | `36` | `max_tokens <= 512`일 때 전송할 대표 프레임 수 |
-| `DEFAULT_SAMPLING_MODE` | `segment` | 기본 샘플링 방식. `segment` 또는 `one_fps` |
-| `DEFAULT_SEGMENT_SECONDS` | `5` | 구간 프레임 방식의 구간 길이 |
-| `DEFAULT_FRAMES_PER_SEGMENT` | `3` | 구간당 대표 프레임 수 |
-| `DEFAULT_MAX_TOKENS` | `1024` | 화면과 API의 기본 응답 토큰 수 |
-
-`MAX_SAMPLE_FRAMES`는 화면에 보여줄 추출 프레임 상한입니다. `MAX_VLLM_INPUT_FRAMES`는 모델 context length 초과를 막기 위해 실제 vLLM 요청에 넣는 대표 프레임 상한입니다. 예를 들어 60장을 추출해도 기본 설정에서는 균등 간격으로 고른 30장만 vLLM에 보냅니다. 그래도 context length 초과가 발생하면 앱이 대표 프레임 수를 절반으로 줄여 1회 재시도합니다.
-
-vLLM 전송 전에 파일 해시가 완전히 같은 중복 프레임은 제거합니다. 같은 이미지가 한 요청에 반복되면 분석 품질 개선 효과가 낮고, 현재 Docker vLLM 환경에서 멀티모달 캐시 내부 오류가 발생한 사례가 있어 중복 제거를 기본 동작으로 둡니다. vLLM이 500 내부 오류를 반환하면 앱은 대표 프레임 수를 절반으로 줄여 1회 재시도합니다.
-
-vLLM 전송 프레임 수는 응답 토큰 설정에 따라 달라집니다.
-
-| 화면의 최대 토큰 | vLLM 전송 대표 프레임 |
+| 최대 토큰 | vLLM 전송 프레임 상한 |
 | ---: | ---: |
-| `512` 이하 | `36`장 |
-| `768` 이하 | `32`장 |
-| `1024` 이하 | `30`장 |
-| `1024` 초과 | `24`장 |
+| `512` 이하 | `36` |
+| `768` 이하 | `32` |
+| `1024` 이하 | `30` |
+| `1024` 초과 | `24` |
 
-화면 입력 제한:
-- 샘플링 방식: 기본 `구간 프레임`, 옵션 `1fps`
-- 최대 프레임 수: `1~120`, 기본 `30`
-- 최대 토큰: `64~2048`, 기본 `1024`
-- batch 영상 수: 최대 `3`
+context length 초과 또는 vLLM 내부 500 오류가 발생하면 앱은 중복 프레임 제거와 프레임 축소 재시도를 수행합니다.
 
-## 한국어 응답 보정
+## 모델과 endpoint
 
-| 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `KOREAN_RETRY_ENABLED` | `1` | 한국어 응답 실패 시 재요청/정리 사용 |
-| `KOREAN_MIN_HANGUL` | `5` | 한국어 판정 최소 한글 글자 수 |
-| `KOREAN_MIN_RATIO` | `0.2` | 전체 문자 대비 한글 비율 기준 |
+| 항목 | 기본값 |
+| --- | --- |
+| 모델 | `Qwen/Qwen3-VL-2B-Instruct` |
+| endpoint | `http://localhost:8000/v1/chat/completions` |
+| vLLM models endpoint | `http://localhost:8000/v1/models` |
+
+화면에서는 사용 모델을 표시만 하고 수정하지 않습니다. 실제 모델을 바꾸려면 vLLM 컨테이너 시작 설정과 앱 설정을 함께 바꿔야 합니다.
 
 ## 다중 worker
 
-| 변수 | 기본값 | 설명 |
-| --- | --- | --- |
-| `VLLM_WORKERS` | 없음 | 쉼표로 구분한 vLLM endpoint 목록 |
-
-예:
+`VLLM_WORKERS`를 설정하면 여러 vLLM endpoint를 worker로 등록할 수 있습니다.
 
 ```powershell
-$env:VLLM_WORKERS="http://localhost:8000/v1/chat/completions,http://localhost:8001/v1/chat/completions"
+$env:VLLM_WORKERS="worker-1=http://host1:8000/v1/chat/completions,worker-2=http://host2:8000/v1/chat/completions"
 python app.py
 ```
 
-로컬 RTX 4070 Ti 12GB에서 vLLM 컨테이너 2개 동시 실행은 OOM 가능성이 높습니다. 다중 worker는 Kubernetes time-slicing 검증 환경에서 우선 확인합니다.
+로컬 RTX 4070 Ti 기본 검증은 worker 1개입니다. worker를 늘리는 것은 별도 GPU/Kubernetes 환경에서 검증해야 합니다.
