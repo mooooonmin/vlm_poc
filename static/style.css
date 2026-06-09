@@ -21,14 +21,15 @@
 }
 
 html {
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
   margin: 0;
   padding: 16px;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(246, 248, 251, 0.96) 210px),
     var(--bg);
@@ -37,10 +38,9 @@ body {
 main {
   max-width: 1540px;
   margin: 0 auto;
-  height: calc(100vh - 32px);
+  min-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 
 .page-header {
@@ -81,8 +81,8 @@ p {
   grid-template-columns: minmax(320px, 390px) minmax(430px, 1fr) minmax(300px, 360px);
   gap: 12px;
   align-items: start;
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 620px;
 }
 
 section {
@@ -96,6 +96,7 @@ section {
 
 .runtime-panel {
   padding: 12px 16px;
+  flex: 0 0 auto;
 }
 
 .runtime-top {
@@ -434,6 +435,51 @@ button:disabled {
   white-space: normal;
 }
 
+.log-panel {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.log-panel:empty {
+  display: none;
+}
+
+.log-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+}
+
+.log-header span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.log-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.log-pre {
+  max-height: min(36vh, 360px);
+  min-height: 140px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-command code {
+  display: block;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
 .check-status {
   display: inline-block;
   min-width: 78px;
@@ -695,6 +741,7 @@ details {
 
   .dashboard-grid,
   .runtime-top,
+  .log-grid,
   .row,
   .stat-grid {
     grid-template-columns: 1fr;

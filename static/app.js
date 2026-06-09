@@ -85,6 +85,7 @@ async function stopVllm() {
 async function loadVllmLogs() {
   const data = await fetchJson("/api/vllm/logs?lines=160");
   $("runtimeDetail").textContent = JSON.stringify(data, null, 2);
+  renderVllmLogs(data);
   $("runtimeStatus").textContent = "vLLM 로그 조회 완료";
 }
 
@@ -109,6 +110,34 @@ function renderWorkers(workers) {
         </div>
       `).join("") || `<span class="hint">등록된 worker가 없습니다.</span>`}
     </div>
+  `;
+}
+
+// vLLM 로그는 JSON 안에 stdout/stderr가 들어가면 읽기 어렵습니다.
+// 화면에는 사람이 바로 볼 수 있도록 stdout, stderr, 실행 명령을 분리해서 표시하고 원본 JSON은 아래 상세에 남깁니다.
+function renderVllmLogs(data) {
+  const stdout = data.stdout || "(stdout 없음)";
+  const stderr = data.stderr || "(stderr 없음)";
+  const command = Array.isArray(data.command) ? data.command.join(" ") : "-";
+  $("vllmLogPanel").innerHTML = `
+    <div class="log-header">
+      <strong>vLLM 로그</strong>
+      <span>returncode: ${escapeHtml(String(data.returncode ?? "-"))}</span>
+    </div>
+    <div class="log-grid">
+      <div>
+        <label>stdout</label>
+        <pre class="log-pre">${escapeHtml(stdout)}</pre>
+      </div>
+      <div>
+        <label>stderr</label>
+        <pre class="log-pre">${escapeHtml(stderr)}</pre>
+      </div>
+    </div>
+    <details class="log-command">
+      <summary>실행 명령</summary>
+      <code>${escapeHtml(command)}</code>
+    </details>
   `;
 }
 
