@@ -445,11 +445,6 @@ def refine_video_type_answer(answer: str, user_request: str) -> str:
         answer_text = first_line.split(":", 1)[1].strip()
         rest = [line for line in lines[1:] if line.strip()]
         return "\n".join([f"답변: {answer_text} 영상으로 보입니다.", *rest])
-    if first_line.startswith("답변:") and "사고 의심" in first_line:
-        rest_text = "\n".join(lines[1:])
-        if any(phrase in rest_text for phrase in ("명확한 시각적 증거는 없음", "명확한 장면은 없음", "일반적인 교통 상황")):
-            rest = [line for line in lines[1:] if line.strip()]
-            return "\n".join(["답변: 고속도로 교통 상황 영상으로 보입니다.", *rest])
     if "○○" not in first_line:
         return "\n".join(lines)
     rest = [line for line in lines[1:] if line.strip()]
@@ -462,10 +457,10 @@ def infer_video_type_from_evidence(text: str) -> str:
 
     새 사실을 만들지 않기 위해 근거 문장에 이미 들어 있는 장소/객체 단어만 사용합니다.
     """
-    no_clear_incident = any(phrase in text for phrase in ("명확한 시각적 증거는 없음", "명확한 장면은 없음", "일반적인 교통 상황"))
-    if "고속도로" in text and ("충돌" in text or "사고" in text) and not no_clear_incident:
+    incident_terms = ("충돌", "접촉", "추돌", "전복", "사고")
+    if "고속도로" in text and any(term in text for term in incident_terms):
         return "고속도로 차량 사고 의심"
-    if "교차로" in text and ("충돌" in text or "사고" in text) and not no_clear_incident:
+    if "교차로" in text and any(term in text for term in incident_terms):
         return "교차로 차량 사고 의심"
     if "고속도로" in text:
         return "고속도로 교통 상황"
@@ -503,23 +498,56 @@ def remove_unsupported_cause_claims(answer: str) -> str:
     return "\n".join(cleaned_lines)
 
 
-def remove_conflicting_incident_claims(answer: str) -> str:
+def normalize_incident_uncertainty(answer: str) -> str:
     """
-    같은 답변 안에서 사고 단정과 사고 증거 없음이 동시에 나온 경우 단정 문구를 낮춥니다.
+    사고 장면 판단과 사고 원인 판단을 분리합니다.
 
-    예: "충돌하는 장면이 나타남"과 "충돌이나 사고의 명확한 시각적 증거는 없음"이 함께 있으면
-    앞의 단정 문구를 제거하고, 보수적인 증거 없음 문장만 남깁니다.
+    충돌/접촉/추돌처럼 화면에 보이는 사건은 "사고 의심"으로 유지합니다.
+    다만 원인, 책임, 법규 위반 여부는 프레임만으로 단정하지 않도록 문장을 바꿉니다.
     """
-    if not any(phrase in answer for phrase in ("명확한 시각적 증거는 없음", "명확한 장면은 없음")):
-        return answer
+    normalized = answer
+    normalized = re.sub(
+        r"그러나\s*이는\s*특정한\s*사건이나\s*사고를\s*나타내는\s*것이\s*아니라\s*일반적인\s*교통\s*상황을\s*(반영|묘사)하고\s*(있음|있습니다)\.?",
+        "다만 사고 원인이나 책임 여부는 프레임만으로 단정할 수 없습니다.",
+        normalized,
+    )
+    normalized = re.sub(
+        r"충돌이나\s*사고의\s*명확한\s*시각적\s*증거는\s*없음\.?",
+        "사고 원인이나 책임 여부는 프레임만으로 단정할 수 없습니다.",
+        normalized,
+    )
+    normalized = re.sub(
+        r"명확한\s*장면은\s*없음\.?",
+        "사고 원인이나 책임 여부는 프레임만으로 단정할 수 없습니다.",
+        normalized,
+    )
+    if "사고 의심" in normalized and any(term in normalized for term in ("충돌", "접촉", "추돌", "전복")):
+        normalized = re.sub(
+            r"그러나\s*이는\s*특정한\s*사건이나\s*위반을\s*나타내는\s*것이\s*아니라\s*일반적인\s*교통\s*상황을\s*(반영|묘사)하고\s*(있음|있습니다|있으며),?",
+            "다만 사고 원인이나 책임 여부는 프레임만으로 단정할 수 없습니다.",
+            normalized,
+        )
+        normalized = re.sub(
+            r"따라서\s*해당\s*영상은\s*일반적인\s*교통\s*상황을\s*기록한\s*것으로\s*판단됨\.?",
+            "",
+            normalized,
+        )
+    return dedupe_sentences(normalized)
 
-    cleaned_lines: list[str] = []
-    for line in answer.splitlines():
-        cleaned = re.sub(r"또한\s*[^.\n。]*(충돌|사고)[^.\n。]*(나타나고 있다|보인다|발생)[^.\n。]*(?:[.。]|$)", "", line).strip()
-        cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        if cleaned:
-            cleaned_lines.append(cleaned)
-    return "\n".join(cleaned_lines)
+
+def dedupe_sentences(text: str) -> str:
+    """같은 문장이 한 답변 안에서 반복될 때 첫 문장만 남깁니다."""
+    parts = re.split(r"(?<=[.!?。])\s+", text)
+    output: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        normalized = re.sub(r"\s+", " ", part).strip()
+        compare_key = re.sub(r"^(다만|그러나|따라서)\s+", "", normalized)
+        if not normalized or compare_key in seen:
+            continue
+        seen.add(compare_key)
+        output.append(part.strip())
+    return " ".join(output)
 
 
 def consolidate_answer_lines(answer: str) -> str:
@@ -548,7 +576,7 @@ def refine_question_specific_answer(answer: str, user_request: str) -> str:
     refined = refine_time_question_answer(refined, user_request)
     refined = refine_video_type_answer(refined, user_request)
     refined = remove_unsupported_cause_claims(refined)
-    refined = remove_conflicting_incident_claims(refined)
+    refined = normalize_incident_uncertainty(refined)
     return refined
 
 
