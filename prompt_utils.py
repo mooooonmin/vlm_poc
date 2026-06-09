@@ -587,7 +587,43 @@ def refine_question_specific_answer(answer: str, user_request: str) -> str:
     refined = remove_unsupported_cause_claims(refined)
     refined = normalize_unsupported_location_claims(refined)
     refined = normalize_incident_uncertainty(refined)
+    refined = compact_time_answer(refined, user_request)
     return compact_display_answer(refined, user_request)
+
+
+def compact_time_answer(answer: str, user_request: str) -> str:
+    """
+    시간 질문의 근거가 프레임별 반복 문장으로 길어지는 것을 줄입니다.
+
+    시간 질문에서는 결론이 가장 중요합니다. 근거는 사용자가 확인할 수 있는 대표 프레임 1~2개면 충분하므로,
+    모델이 `프레임 #13`, `프레임 #14` ...처럼 같은 움직임을 반복하면 앞쪽 근거만 남깁니다.
+    """
+    if classify_question_type(user_request) != "time":
+        return answer
+
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    answer_line = next((line for line in lines if line.startswith("답변:")), lines[0])
+    evidence_text = " ".join(line for line in lines if line != answer_line)
+    evidence_text = re.sub(r"\s*근거:\s*", "", evidence_text, count=1).strip()
+    evidence_text = shorten_repeated_frame_evidence(evidence_text)
+    if evidence_text:
+        return "\n".join([answer_line, f"근거: {evidence_text}"])
+    return answer_line
+
+
+def shorten_repeated_frame_evidence(text: str) -> str:
+    """반복되는 `프레임 #n` 근거 중 사용자가 확인할 대표 근거만 남깁니다."""
+    if text.count("프레임 #") < 3:
+        return text
+
+    chunks = re.split(r",\s*(?=프레임\s*#\d+)", text)
+    representative = [chunk.strip() for chunk in chunks if chunk.strip()][:2]
+    if not representative:
+        return text
+    compact = ", ".join(representative)
+    if len(chunks) > len(representative):
+        compact += " 등에서 같은 변화가 이어집니다."
+    return compact
 
 
 def normalize_unsupported_location_claims(answer: str) -> str:

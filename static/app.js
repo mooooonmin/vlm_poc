@@ -468,13 +468,59 @@ function renderJob(job) {
   renderVideoPreview(job);
   renderFrameCards(job.frames || []);
   if (job.status === "done") {
-    $("answer").textContent = job.answer || "(응답 텍스트 없음)";
+    renderAnswer(job.answer || "(응답 텍스트 없음)");
   } else if (job.status === "failed") {
-    $("answer").textContent = `실패: ${job.failure_reason || job.error?.message || job.message || "분석 실패"}`;
+    renderAnswer(`실패: ${job.failure_reason || job.error?.message || job.message || "분석 실패"}`);
   } else {
-    $("answer").textContent = `분석 중 · 프레임 ${sampledCount}개`;
+    renderAnswer(`분석 중 · 프레임 ${sampledCount}개`);
   }
   $("jobLogPath").textContent = job.job_dir ? `로그: ${job.job_dir}\\job.json` : "";
+}
+
+// VLM 응답은 원문을 그대로 긴 문단으로 보여주면 읽기 어렵습니다.
+// 화면에서는 `답변`, `요약`, `근거`, `비고` 같은 라벨을 카드 형태로 나누어 표시합니다.
+function renderAnswer(answerText) {
+  const parsed = parseAnswerSections(answerText || "");
+  $("answer").innerHTML = `
+    <div class="answer-summary">
+      <span>${escapeHtml(parsed.primaryLabel)}</span>
+      <strong>${escapeHtml(parsed.primaryText || "-")}</strong>
+    </div>
+    ${parsed.sections.map((section) => `
+      <div class="answer-section">
+        <span>${escapeHtml(section.label)}</span>
+        <p>${escapeHtml(section.text)}</p>
+      </div>
+    `).join("")}
+  `;
+}
+
+function parseAnswerSections(answerText) {
+  const lines = String(answerText).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const primary = lines.find((line) => /^(답변|요약|실패):/.test(line)) || lines[0] || "";
+  const primaryLabel = (primary.match(/^(답변|요약|실패):/) || ["답변"])[0].replace(":", "");
+  const primaryText = primary.replace(/^(답변|요약|실패):\s*/, "");
+  const sections = [];
+
+  for (const line of lines) {
+    if (line === primary) {
+      continue;
+    }
+    const match = line.match(/^(근거|주요 장면|주의|비고):\s*(.*)$/);
+    if (match) {
+      sections.push({ label: match[1], text: tidyAnswerSection(match[2]) });
+    } else {
+      sections.push({ label: "상세", text: tidyAnswerSection(line) });
+    }
+  }
+  return { primaryLabel, primaryText: tidyAnswerSection(primaryText), sections };
+}
+
+function tidyAnswerSection(text) {
+  return String(text)
+    .replace(/\s+/g, " ")
+    .replace(/,\s*(프레임\s*#\d+)/g, " · $1")
+    .trim();
 }
 
 // 추출 프레임은 모델 답변의 근거이므로 사용자가 직접 크게 확인할 수 있어야 합니다.
@@ -599,7 +645,7 @@ function clearResult() {
   $("batchPanel").innerHTML = "";
   $("videoPreview").className = "video-preview empty";
   $("videoPreview").textContent = "아직 미리보기 가능한 영상이 없습니다.";
-  $("answer").textContent = "";
+  $("answer").innerHTML = "";
   $("jobLogPath").textContent = "";
   $("frames").innerHTML = "";
 }
