@@ -1,7 +1,7 @@
 let activeConversationId = null;
 let conversationPollTimer = null;
 
-// vLLM 상태 코드는 backend에서 오고, 화면에서는 사용자가 이해하기 쉬운 문구로 바꿔 보여줍니다.
+// backend의 vLLM lifecycle 코드를 화면용 짧은 상태 문구로 바꿉니다.
 const lifecycleLabels = {
   not_started: "vLLM 미시작",
   starting: "vLLM 시작 중",
@@ -25,10 +25,12 @@ async function fetchJson(url, options = {}) {
   return data;
 }
 
-// 화면 초기화입니다. 런타임 상태와 대화 목록을 병렬로 불러와 첫 화면을 구성합니다.
 async function initializeApp() {
   bindEvents();
   await Promise.all([refreshRuntime(), loadConversations()]);
+  if (!activeConversationId) {
+    updateSendState(null);
+  }
 }
 
 function bindEvents() {
@@ -54,11 +56,9 @@ function setActivePanel(panelName) {
   document.querySelectorAll(".nav-item").forEach((button) => {
     button.classList.toggle("active", button.dataset.panel === panelName);
   });
-  const showUtilities = panelName !== "analysis";
-  $("runtimePanel").classList.toggle("emphasized", panelName === "runtime");
-  $("logPanel").classList.toggle("emphasized", panelName === "logs");
-  if (showUtilities) {
-    const target = panelName === "logs" ? $("logPanel") : $("runtimePanel");
+  const target = panelName === "logs" ? $("logPanel") : $("runtimePanel");
+  if (panelName !== "analysis") {
+    target.querySelector("details")?.setAttribute("open", "");
     target.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 }
@@ -88,16 +88,37 @@ async function selectConversation(conversationId) {
   startConversationPollingIfNeeded(conversation);
 }
 
+function getConversationState(conversation) {
+  const last = conversation.last_message || (conversation.messages || []).at?.(-1);
+  if (!conversation.source) {
+    return { label: "영상 필요", tone: "muted" };
+  }
+  if (last?.status === "running" || last?.status === "queued") {
+    return { label: "분석 중", tone: "working" };
+  }
+  if (last?.status === "failed") {
+    return { label: "실패", tone: "failed" };
+  }
+  if (last?.status === "done") {
+    return { label: "완료", tone: "done" };
+  }
+  return { label: "준비됨", tone: "ready" };
+}
+
 function renderConversationList(conversations) {
   $("conversationList").innerHTML = conversations.map((conversation) => {
-    const sourceName = conversation.source?.name || "영상 없음";
-    const last = conversation.last_message?.content || "";
+    const sourceName = conversation.source?.name || "영상 미등록";
+    const last = conversation.last_message?.content || conversation.updated_at || "";
+    const state = getConversationState(conversation);
     return `
       <button type="button" class="conversation-item ${conversation.conversation_id === activeConversationId ? "active" : ""}"
         onclick="selectConversation('${escapeHtml(conversation.conversation_id)}')">
-        <strong>${escapeHtml(conversation.title || "새 영상 분석")}</strong>
+        <div class="conversation-row">
+          <strong>${escapeHtml(conversation.title || "새 영상 분석")}</strong>
+          <span class="state-badge ${escapeHtml(state.tone)}">${escapeHtml(state.label)}</span>
+        </div>
         <span>${escapeHtml(sourceName)}</span>
-        <small>${escapeHtml(last || conversation.updated_at || "")}</small>
+        <small>${escapeHtml(last)}</small>
       </button>
     `;
   }).join("") || `<div class="empty-list">아직 대화가 없습니다.</div>`;
@@ -134,6 +155,13 @@ async function submitChatMessage(event) {
     await createNewConversation();
   }
 
+  const conversation = await fetchJson(`/api/conversations/${encodeURIComponent(activeConversationId)}`);
+  if (!conversation.source) {
+    $("conversationMeta").textContent = "먼저 오른쪽 패널에서 영상을 등록하세요.";
+    updateSendState(conversation);
+    return;
+  }
+
   const prompt = $("chatPrompt").value.trim();
   if (!prompt) {
     $("conversationMeta").textContent = "질문을 입력하세요.";
@@ -156,12 +184,12 @@ async function submitChatMessage(event) {
       body: formData,
     });
     $("chatPrompt").value = "";
-    const conversation = await fetchJson(`/api/conversations/${encodeURIComponent(activeConversationId)}`);
-    renderConversation(conversation);
-    startConversationPollingIfNeeded(conversation);
+    const updated = await fetchJson(`/api/conversations/${encodeURIComponent(activeConversationId)}`);
+    renderConversation(updated);
+    startConversationPollingIfNeeded(updated);
     await loadConversations();
   } catch (error) {
-    addLocalSystemMessage(String(error));
+    $("conversationMeta").textContent = String(error);
   } finally {
     button.disabled = false;
   }
@@ -194,7 +222,7 @@ function startConversationPollingIfNeeded(conversation) {
         stopConversationPolling();
       }
     } catch (error) {
-      addLocalSystemMessage(String(error));
+      $("conversationMeta").textContent = String(error);
       stopConversationPolling();
     }
   }, 2500);
@@ -214,6 +242,16 @@ function renderConversation(conversation) {
   renderChatMessages(conversation);
   renderConversationVideo(conversation);
   renderLatestJobEvidence(conversation);
+  updateSendState(conversation);
+}
+
+function updateSendState(conversation) {
+  const hasSource = Boolean(conversation?.source);
+  $("sendMessageBtn").disabled = !hasSource;
+  $("chatPrompt").placeholder = hasSource
+    ? "예: 이 영상에서 사고는 언제 발생했어?"
+    : "영상을 등록한 뒤 질문할 수 있습니다.";
+  $("flowHint").textContent = hasSource ? "영상 등록 완료 · 질문 가능" : "1 새 대화 · 2 영상 등록 · 3 질문";
 }
 
 function formatConversationMeta(conversation) {
@@ -227,8 +265,8 @@ function renderChatMessages(conversation) {
   if (!messages.length) {
     $("chatMessages").innerHTML = `
       <div class="empty-state">
-        <strong>질문을 시작하세요.</strong>
-        <span>오른쪽에서 영상을 등록한 뒤 사고 시점, 주요 상황, 객체 움직임을 물어볼 수 있습니다.</span>
+        <strong>${conversation.source ? "질문을 입력하세요." : "영상을 먼저 등록하세요."}</strong>
+        <span>${conversation.source ? "사고 시점, 주요 상황, 차량 움직임처럼 확인할 내용을 물어보세요." : "오른쪽 패널에서 파일 또는 YouTube URL을 등록하면 질문을 보낼 수 있습니다."}</span>
       </div>
     `;
     return;
@@ -253,32 +291,35 @@ function renderMessage(message, job) {
 
   const status = message.status || job?.status || "done";
   const content = job?.status === "done" ? job.answer : message.content;
-  const meta = job ? `${escapeHtml(job.worker_id || "worker 미배정")} · ${escapeHtml(job.duration_ms == null ? status : `${job.duration_ms}ms`)}` : status;
+  const duration = job?.duration_ms == null ? "" : ` · ${job.duration_ms}ms`;
+  const worker = job?.worker_id ? `${job.worker_id}${duration}` : status;
   return `
     <article class="message assistant">
       <div class="message-card">
-        <div class="message-status ${escapeHtml(status)}">${escapeHtml(status)}</div>
+        <div class="message-topline">
+          <span class="message-status ${escapeHtml(status)}">${escapeHtml(status)}</span>
+          <span class="message-meta">${escapeHtml(worker)}</span>
+        </div>
         ${renderAnswerHtml(content || "분석 중입니다.")}
-        <div class="message-meta">${meta}</div>
       </div>
     </article>
   `;
-}
-
-function addLocalSystemMessage(text) {
-  $("conversationMeta").textContent = text;
 }
 
 function renderConversationVideo(conversation) {
   const source = conversation.source;
   if (!source) {
     $("videoSourceStatus").textContent = "등록된 영상이 없습니다.";
+    $("videoReadyBadge").textContent = "미등록";
+    $("videoReadyBadge").className = "state-badge muted";
     $("videoPreview").className = "video-preview empty";
-    $("videoPreview").textContent = "아직 미리보기 가능한 영상이 없습니다.";
+    $("videoPreview").textContent = "영상을 등록한 뒤 첫 질문을 보내면 미리보기가 표시됩니다.";
     return;
   }
 
   $("videoSourceStatus").textContent = source.name || "영상 등록됨";
+  $("videoReadyBadge").textContent = "등록됨";
+  $("videoReadyBadge").className = "state-badge ready";
   const latestJob = getLatestJobWithVideo(conversation);
   if (!latestJob) {
     $("videoPreview").className = "video-preview empty";
@@ -305,7 +346,6 @@ function getLatestJobWithVideo(conversation) {
   return [...jobs].reverse().find((job) => job.source?.path);
 }
 
-// 상단/우측 런타임 패널에서 GPU, vLLM, worker readiness를 한 번에 확인합니다.
 async function refreshRuntime() {
   const [gpu, vllm, timeslicing, config, workers] = await Promise.all([
     fetchJson("/api/gpu-status"),
