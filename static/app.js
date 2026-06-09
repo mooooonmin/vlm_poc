@@ -433,6 +433,7 @@ function renderJob(job) {
   const durationText = job.duration_ms == null ? "" : ` / ${job.duration_ms}ms`;
   $("jobStatus").textContent = `${job.source?.name || job.job_id} · ${job.status}${workerText}${durationText}`;
   $("analyzeStatus").textContent = `현재: ${job.status}`;
+  renderVideoPreview(job);
   $("frames").innerHTML = (job.frames || []).map((frame) => `
     <div class="frame-card">
       <img src="${frame.preview_url}" alt="sample frame ${frame.index}" />
@@ -447,6 +448,30 @@ function renderJob(job) {
     $("answer").textContent = `분석 중 · 프레임 ${sampledCount}개`;
   }
   $("jobLogPath").textContent = job.job_dir ? `로그: ${job.job_dir}\\job.json` : "";
+}
+
+// 업로드 파일이나 URL에서 다운로드된 원본 영상을 화면에서 바로 확인합니다.
+// URL 영상은 다운로드가 끝난 뒤 source.path가 생기므로, queued/running 초반에는 안내 문구만 표시됩니다.
+function renderVideoPreview(job) {
+  const preview = $("videoPreview");
+  if (!job.source?.path) {
+    preview.className = "video-preview empty";
+    preview.textContent = "영상 파일을 준비하는 중입니다.";
+    return;
+  }
+
+  const videoUrl = `/api/jobs/${encodeURIComponent(job.job_id)}/video`;
+  const sourceType = job.source?.type === "upload" ? "업로드 파일" : "URL 다운로드";
+  const duration = job.video_info?.duration_sec == null ? "" : `<span>${Number(job.video_info.duration_sec).toFixed(2)}초</span>`;
+  preview.className = "video-preview";
+  preview.innerHTML = `
+    <video controls preload="metadata" src="${videoUrl}"></video>
+    <div class="video-meta">
+      <span>${escapeHtml(sourceType)}</span>
+      <span>${escapeHtml(job.source?.name || job.job_id)}</span>
+      ${duration}
+    </div>
+  `;
 }
 
 // job.json에는 반복 테스트용 점검 항목이 저장됩니다.
@@ -489,6 +514,8 @@ function formatJobTiming(job) {
 function clearResult() {
   $("jobStatus").textContent = "작업을 준비 중입니다.";
   $("batchPanel").innerHTML = "";
+  $("videoPreview").className = "video-preview empty";
+  $("videoPreview").textContent = "아직 미리보기 가능한 영상이 없습니다.";
   $("answer").textContent = "";
   $("jobLogPath").textContent = "";
   $("frames").innerHTML = "";

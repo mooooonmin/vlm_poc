@@ -121,6 +121,7 @@ Invoke-RestMethod -Uri http://localhost:8000/v1/models
 
 정상 기준:
 - job 상태가 `done`으로 끝남
+- 영상 미리보기가 표시됨
 - 추출 프레임 카드가 표시됨
 - VLM 응답이 표시됨
 - `tmp/jobs/{job_id}/job.json`이 생성됨

@@ -802,6 +802,31 @@ def api_get_job(job_id: str) -> dict[str, Any]:
     return job
 
 
+@app.get("/api/jobs/{job_id}/video")
+def api_get_job_video(job_id: str) -> FileResponse:
+    """job 폴더에 저장된 업로드/다운로드 영상을 미리보기용으로 반환합니다."""
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="해당 job_id를 찾을 수 없습니다.")
+
+    source = job.get("source") or {}
+    video_path_text = source.get("path")
+    if not video_path_text:
+        raise HTTPException(status_code=404, detail="아직 미리보기 가능한 영상 파일이 없습니다.")
+
+    job_dir = Path(str(job.get("job_dir") or "")).resolve()
+    video_path = Path(str(video_path_text)).resolve()
+    try:
+        video_path.relative_to(job_dir)
+    except ValueError as error:
+        raise HTTPException(status_code=403, detail="job 폴더 밖의 파일은 미리볼 수 없습니다.") from error
+
+    if not video_path.exists() or not video_path.is_file():
+        raise HTTPException(status_code=404, detail="영상 파일을 찾을 수 없습니다.")
+
+    return FileResponse(video_path)
+
+
 # 오래된 클라이언트 호환 API입니다.
 # 새 화면은 job 기반 비동기 흐름을 사용하지만, 기존 `/api/analyze-video` 호출이 바로 깨지지 않도록 남겨 둡니다.
 @app.post("/api/analyze-video")

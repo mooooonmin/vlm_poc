@@ -530,6 +530,42 @@ button:disabled {
   gap: 8px;
 }
 
+.video-preview {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.video-preview.empty {
+  padding: 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.video-preview video {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  background: #101828;
+}
+
+.video-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.video-meta span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .frame-card {
   border: 1px solid var(--line);
   border-radius: 6px;

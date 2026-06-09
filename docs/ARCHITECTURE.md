@@ -13,7 +13,7 @@
   -> vLLM OpenAI 호환 API 호출
   -> 응답 후처리
   -> tmp/jobs/{job_id}/job.json 저장
-  -> 화면에 프레임과 답변 표시
+  -> 화면에 영상 미리보기, 프레임, 답변 표시
 ```
 
 ## 주요 구성
@@ -48,6 +48,10 @@
 | `logs/timeslicing/{run_id}/` | Kubernetes/time-slicing 검증 리포트 |
 
 `tmp/`와 `logs/`의 자동 생성 파일은 임시파일 정리 대상입니다. `docs/TEST_RESULTS.md`는 사람이 관리하는 검증 문서라 삭제 대상이 아닙니다.
+
+## 영상 미리보기
+
+업로드 파일과 URL에서 다운로드된 영상은 `tmp/jobs/{job_id}/input.*` 형태로 저장됩니다. 화면은 `/api/jobs/{job_id}/video`를 통해 해당 job 폴더 안의 영상만 미리보기로 표시합니다. `tmp` 전체를 정적 경로로 공개하지 않고, job에 기록된 영상 경로가 해당 job 폴더 내부일 때만 반환합니다.
 
 ## vLLM 사용 방식
 

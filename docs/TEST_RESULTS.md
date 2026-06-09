@@ -40,6 +40,7 @@
 | 2026-06-09 | 로컬 Docker/vLLM | `https://youtube.com/shorts/7WQZxMdXbqI` | 8 | 성공 | - | job `1780966150_94cec3be`, 9,641ms, 추정성 표현과 반복 관찰 |
 | 2026-06-09 | 로컬 Docker/vLLM | `https://youtu.be/kSW4PKuowYg` | 8 | 성공 | - | job `1780966150_88571e75`, 9,479ms, 차량/사람 장면 요약 |
 | 2026-06-09 | 로컬 Docker/vLLM | `https://www.youtube.com/watch?v=jNQXAC9IVRw` | 8 | 성공 | - | job `1780966150_599f6560`, 10,356ms, 일부 `확인 불가` 포함 |
+| 2026-06-09 | 로컬 UI/API | 영상 미리보기 endpoint | 4 | 성공 | - | job `1780980486_a09e86d4`, `GET /api/jobs/{job_id}/video` 200, `video/mp4`, 629,172 bytes 확인 |
 
 ## 2026-06-09 실제 영상 테스트 메모
 
