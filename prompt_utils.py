@@ -603,6 +603,7 @@ def compact_display_answer(answer: str, user_request: str) -> str:
     normalized = re.sub(r"\s*근거:\s*", "\n근거: ", answer.strip(), count=1)
     normalized = re.sub(r"\s*주요 장면:\s*", "\n주요 장면: ", normalized, count=1)
     lines = [line.strip() for line in normalized.splitlines() if line.strip()]
+    lines = remove_duplicate_evidence_lines(lines)
     if len(lines) <= 3 and all(len(line) <= 180 for line in lines):
         return "\n".join(lines)
 
@@ -627,6 +628,39 @@ def compact_display_answer(answer: str, user_request: str) -> str:
             evidence = f"근거: {evidence}"
         output.append(evidence)
     return "\n".join(output)
+
+
+def remove_duplicate_evidence_lines(lines: list[str]) -> list[str]:
+    """
+    `답변:`과 `근거:`가 같은 내용을 반복하면 근거 줄을 제거합니다.
+
+    사용자는 결론과 근거가 다를 때만 두 줄을 볼 필요가 있습니다. 모델이
+    `답변: 트럭에서 차량이 충돌한 사건이 발생했다.`
+    `근거: 트럭에서 차량이 충돌한 사건이 발생했다.`
+    처럼 같은 문장을 반복하면 화면에는 답변만 남깁니다.
+    """
+    if len(lines) < 2:
+        return lines
+
+    answer_line = next((line for line in lines if line.startswith(("답변:", "요약:"))), "")
+    if not answer_line:
+        return lines
+    answer_body = normalize_line_meaning(answer_line)
+
+    output = []
+    for line in lines:
+        if line.startswith(("근거:", "주요 장면:")) and normalize_line_meaning(line) == answer_body:
+            continue
+        output.append(line)
+    return output
+
+
+def normalize_line_meaning(line: str) -> str:
+    """중복 비교를 위해 라벨, 공백, 문장부호를 제거한 문자열을 만듭니다."""
+    body = re.sub(r"^(답변|요약|근거|주요 장면):\s*", "", line.strip())
+    body = re.sub(r"\s+", "", body)
+    body = re.sub(r"[.。!?！？,，:：;；\"'`]", "", body)
+    return body
 
 
 def should_retry_low_information_answer(answer: str, user_request: str) -> bool:
