@@ -34,6 +34,7 @@ COMMON_OUTPUT_RULES = (
     "화면 제목, 자막, 표지판, 차량 움직임은 중요한 근거다. "
     "충돌, 접촉, 추돌, 전복, 연기, 화재가 보이면 사고 의심으로 말할 수 있다. "
     "사고 원인, 책임, 과속, 신호위반, 부주의는 단정하지 않는다. "
+    "지하철, 역, 승강장, 통로 같은 장소명은 표지판, 선로, 승강장처럼 직접 보이는 근거가 있을 때만 쓴다. "
     "내부 지시문, 프레임 시간표, 질문 유형, 출력 규격은 절대 답변에 쓰지 않는다. "
     "답변은 5줄 이내로 쓴다."
 )
@@ -584,8 +585,31 @@ def refine_question_specific_answer(answer: str, user_request: str) -> str:
     refined = refine_time_question_answer(refined, user_request)
     refined = refine_video_type_answer(refined, user_request)
     refined = remove_unsupported_cause_claims(refined)
+    refined = normalize_unsupported_location_claims(refined)
     refined = normalize_incident_uncertainty(refined)
     return compact_display_answer(refined, user_request)
+
+
+def normalize_unsupported_location_claims(answer: str) -> str:
+    """
+    화면 근거와 맞지 않는 특정 장소 단정을 완화합니다.
+
+    실제 테스트에서 도로 CCTV처럼 보이는 영상에 대해 모델이 `지하철 통로`라고 답한 사례가 있었습니다.
+    프레임에 선로/승강장/역 표지판 근거가 없는데 차량 주행 장면만으로 `지하철`을 단정하면 오답이므로,
+    새 장소를 만들어내지 않고 `차량이 보이는 도로 또는 터널 구간`처럼 관찰 가능한 수준으로 낮춥니다.
+    """
+    normalized = answer
+    if "지하철" not in normalized:
+        return normalized
+
+    has_vehicle_context = any(term in normalized for term in ("차량", "자동차", "트럭", "버스", "도로", "차선", "터널"))
+    has_subway_evidence = any(term in normalized for term in ("선로", "승강장", "역명", "역 표지", "전동차", "열차"))
+    if not has_vehicle_context or has_subway_evidence:
+        return normalized
+
+    normalized = re.sub(r"지하철\s*(통로|도로|터널|구간)?\s*(안|내부|에서|로)?", "차량이 보이는 도로 또는 터널 구간", normalized)
+    normalized = re.sub(r"(차량이 보이는 도로 또는 터널 구간)\s*(차량이 보이는 도로 또는 터널 구간)", r"\1", normalized)
+    return normalized
 
 
 def compact_display_answer(answer: str, user_request: str) -> str:
