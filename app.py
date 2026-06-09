@@ -74,6 +74,10 @@ STATIC_DIR = BASE_DIR / "static"
 # PoC 안정성을 위한 기본 제한값입니다.
 # 구간 프레임/1fps 모두에서 너무 많은 프레임을 vLLM에 한 번에 보내지 않도록 최대 추출 장수를 제한합니다.
 MAX_SAMPLE_FRAMES = int(os.environ.get("MAX_SAMPLE_FRAMES", "120"))
+# 화면에는 최대 120장까지 추출 프레임을 보여줄 수 있지만, vLLM에는 그보다 적은 수를 보내야 합니다.
+# Qwen3-VL-2B를 MAX_MODEL_LEN=8192로 띄운 현재 설정에서는 36장 입력에서도 context length 초과가 발생했습니다.
+# 그래서 기본 전송 상한은 30장으로 두고, 초과 에러가 나면 더 줄여서 1회 재시도합니다.
+MAX_VLLM_INPUT_FRAMES = int(os.environ.get("MAX_VLLM_INPUT_FRAMES", "30"))
 DEFAULT_SAMPLING_MODE = os.environ.get("DEFAULT_SAMPLING_MODE", VIDEO_DEFAULT_SAMPLING_MODE)
 DEFAULT_SEGMENT_SECONDS = int(os.environ.get("DEFAULT_SEGMENT_SECONDS", str(VIDEO_DEFAULT_SEGMENT_SECONDS)))
 DEFAULT_FRAMES_PER_SEGMENT = int(os.environ.get("DEFAULT_FRAMES_PER_SEGMENT", str(VIDEO_DEFAULT_FRAMES_PER_SEGMENT)))
@@ -108,6 +112,50 @@ def call_vllm(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     response = requests.post(endpoint, json=payload, timeout=180)
     response.raise_for_status()
     return response.json()
+
+
+def select_vllm_input_frames(frames: list[dict[str, Any]], limit: int = MAX_VLLM_INPUT_FRAMES) -> list[dict[str, Any]]:
+    """
+    추출 프레임 중 vLLM에 실제로 보낼 대표 프레임을 고릅니다.
+
+    프레임을 많이 추출하는 것은 사용자가 근거를 확인하는 데 도움이 됩니다. 하지만 모든 프레임을
+    vLLM에 한 번에 보내면 모델 context length를 초과할 수 있습니다. 이 함수는 전체 시간대를
+    최대한 유지하도록 균등 간격으로 대표 프레임만 선택합니다.
+    """
+    if limit <= 0 or len(frames) <= limit:
+        return frames
+
+    if limit == 1:
+        return [frames[0]]
+
+    step = (len(frames) - 1) / (limit - 1)
+    selected_indexes = []
+    seen = set()
+    for position in range(limit):
+        index = round(position * step)
+        if index not in seen:
+            selected_indexes.append(index)
+            seen.add(index)
+    return [frames[index] for index in selected_indexes]
+
+
+def is_context_length_error(error: requests.HTTPError) -> bool:
+    """vLLM context length 초과 에러인지 확인합니다."""
+    detail = error.response.text if error.response is not None else str(error)
+    lowered = detail.lower()
+    return "context length" in lowered or "input length" in lowered or "maximum context length" in lowered
+
+
+def friendly_vllm_error_message(error: requests.HTTPError) -> str:
+    """vLLM HTTP 에러를 화면에서 이해하기 쉬운 문장으로 바꿉니다."""
+    detail = error.response.text if error.response is not None else str(error)
+    if is_context_length_error(error):
+        return (
+            "vLLM 입력 한도를 초과했습니다. 프레임을 많이 추출해도 모델에는 일부 대표 프레임만 보낼 수 있습니다. "
+            "최대 프레임 수를 낮추거나 MAX_VLLM_INPUT_FRAMES 설정을 더 낮춰 다시 시도하세요. "
+            f"원본 오류: {detail}"
+        )
+    return f"vLLM 요청 실패: {detail}"
 
 
 def assess_korean_response(answer: str) -> dict[str, Any]:
@@ -339,13 +387,25 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
 
         current_stage = "payload_prepare"
         update_job(job_id, message="프레임을 vLLM 요청용 base64 이미지로 변환하는 중입니다.")
+        vllm_frame_sources = select_vllm_input_frames(frames)
+        video_info["vllm_input_frame_count"] = len(vllm_frame_sources)
+        video_info["vllm_input_frame_limit"] = MAX_VLLM_INPUT_FRAMES
+        video_info["vllm_input_frame_reduced"] = len(vllm_frame_sources) < len(frames)
+        update_job(
+            job_id,
+            video_info=video_info,
+            message=(
+                f"추출 프레임 {len(frames)}장 중 vLLM context 한도 보호를 위해 "
+                f"대표 프레임 {len(vllm_frame_sources)}장을 전송합니다."
+            ),
+        )
         sampled_frames = [
             {
                 "index": frame["index"],
                 "timestamp_sec": frame["timestamp_sec"],
                 "data_url": encode_frame_to_data_url(Path(frame["path"])),
             }
-            for frame in frames
+            for frame in vllm_frame_sources
         ]
         payload = build_vllm_payload(
             str(settings["model_id"]),
@@ -362,7 +422,38 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             vllm_request_started_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             message=f"{worker['worker_id']} vLLM endpoint로 영상 분석 요청을 보내는 중입니다.",
         )
-        raw_response = call_vllm(worker_endpoint, payload)
+        try:
+            raw_response = call_vllm(worker_endpoint, payload)
+        except requests.HTTPError as error:
+            if not is_context_length_error(error) or len(sampled_frames) <= 1:
+                raise
+            retry_limit = max(1, len(sampled_frames) // 2)
+            vllm_frame_sources = select_vllm_input_frames(frames, retry_limit)
+            sampled_frames = [
+                {
+                    "index": frame["index"],
+                    "timestamp_sec": frame["timestamp_sec"],
+                    "data_url": encode_frame_to_data_url(Path(frame["path"])),
+                }
+                for frame in vllm_frame_sources
+            ]
+            video_info["vllm_input_frame_count"] = len(sampled_frames)
+            video_info["vllm_context_retry_used"] = True
+            update_job(
+                job_id,
+                video_info=video_info,
+                message=(
+                    "vLLM 입력 길이가 모델 한도를 초과해 대표 프레임 수를 줄여 1회 재시도합니다. "
+                    f"재시도 프레임: {len(sampled_frames)}장"
+                ),
+            )
+            payload = build_vllm_payload(
+                str(settings["model_id"]),
+                str(settings["prompt"]),
+                sampled_frames,
+                int(settings["max_tokens"]),
+            )
+            raw_response = call_vllm(worker_endpoint, payload)
         answer = normalize_answer_text(extract_answer(raw_response))
         answer = refine_question_specific_answer(answer, str(settings["prompt"]))
         low_information_retry_used = False
@@ -480,9 +571,8 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         )
         append_gpu_snapshot(job_id, "job_finished")
     except requests.HTTPError as error:
-        detail = error.response.text if error.response is not None else str(error)
         append_gpu_snapshot(job_id, "job_failed")
-        mark_job_failed(job_id, f"vLLM 요청 실패: {detail}", error, current_stage, job_started_perf)
+        mark_job_failed(job_id, friendly_vllm_error_message(error), error, current_stage, job_started_perf)
     except Exception as error:
         append_gpu_snapshot(job_id, "job_failed")
         mark_job_failed(job_id, classify_user_error(error), error, current_stage, job_started_perf)
@@ -925,6 +1015,7 @@ def api_config() -> dict[str, Any]:
         "default_frames_per_segment": DEFAULT_FRAMES_PER_SEGMENT,
         "default_max_tokens": DEFAULT_MAX_TOKENS,
         "max_sample_frames": MAX_SAMPLE_FRAMES,
+        "max_vllm_input_frames": MAX_VLLM_INPUT_FRAMES,
         "max_batch_videos": MAX_BATCH_VIDEOS,
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_video_duration_sec": MAX_VIDEO_DURATION_SEC,

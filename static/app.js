@@ -45,6 +45,7 @@ async function refreshRuntime() {
     `모델: ${config.default_model_id}`,
     `worker ${(workers.workers || []).length}개`,
     config.processing_mode,
+    `vLLM 전송 상한 ${config.max_vllm_input_frames || "-"}장`,
   ].map((text) => `<span>${escapeHtml(text)}</span>`).join("");
   applyConfigToForm(config);
   renderWorkers(workers.workers || []);
@@ -572,11 +573,14 @@ function formatSamplingSummary(videoInfo) {
   }
   const count = videoInfo.sampled_frame_count ?? 0;
   const limit = videoInfo.requested_max_frames ?? "-";
+  const vllmCount = videoInfo.vllm_input_frame_count ?? count;
+  const reduced = videoInfo.vllm_input_frame_reduced ? ` / vLLM 전송 ${vllmCount}장` : "";
+  const retry = videoInfo.vllm_context_retry_used ? " / 한도 초과 재시도" : "";
   const limited = videoInfo.sampling_limited ? " / 상한 도달" : "";
   const mode = videoInfo.sampling_strategy === "segment_representative_frames"
     ? `구간 ${videoInfo.segment_seconds ?? "-"}초 x ${videoInfo.frames_per_segment ?? "-"}장`
     : "1fps";
-  return ` / ${mode} ${count}/${limit}장${limited}`;
+  return ` / ${mode} ${count}/${limit}장${limited}${reduced}${retry}`;
 }
 
 // 업로드 파일이나 URL에서 다운로드된 원본 영상을 화면에서 바로 확인합니다.

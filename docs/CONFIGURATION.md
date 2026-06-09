@@ -52,10 +52,13 @@ python app.py
 | `MAX_UPLOAD_BYTES` | `1073741824` | 업로드 파일 최대 크기, 기본 1GB |
 | `MAX_VIDEO_DURATION_SEC` | `1800` | 분석 허용 영상 길이, 기본 30분 |
 | `MAX_SAMPLE_FRAMES` | `120` | 분석용으로 추출할 최대 프레임 수 |
+| `MAX_VLLM_INPUT_FRAMES` | `30` | vLLM에 한 번에 전송할 최대 대표 프레임 수 |
 | `DEFAULT_SAMPLING_MODE` | `segment` | 기본 샘플링 방식. `segment` 또는 `one_fps` |
 | `DEFAULT_SEGMENT_SECONDS` | `5` | 구간 프레임 방식의 구간 길이 |
 | `DEFAULT_FRAMES_PER_SEGMENT` | `3` | 구간당 대표 프레임 수 |
 | `DEFAULT_MAX_TOKENS` | `1024` | 화면과 API의 기본 응답 토큰 수 |
+
+`MAX_SAMPLE_FRAMES`는 화면에 보여줄 추출 프레임 상한입니다. `MAX_VLLM_INPUT_FRAMES`는 모델 context length 초과를 막기 위해 실제 vLLM 요청에 넣는 대표 프레임 상한입니다. 예를 들어 60장을 추출해도 기본 설정에서는 균등 간격으로 고른 30장만 vLLM에 보냅니다. 그래도 context length 초과가 발생하면 앱이 대표 프레임 수를 절반으로 줄여 1회 재시도합니다.
 
 화면 입력 제한:
 - 샘플링 방식: 기본 `구간 프레임`, 옵션 `1fps`
