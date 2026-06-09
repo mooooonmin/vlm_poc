@@ -9,22 +9,16 @@
 | Python | `python --version` | Python 3.10 이상 권장 |
 | NVIDIA GPU | `nvidia-smi` | GPU 이름과 VRAM 정보 표시 |
 | Docker Desktop | `docker version` | Client/Server 정보 표시 |
-| Git | `git --version` | Git 버전 표시 |
 
 `nvidia-smi` 또는 `docker version`이 실패하면 앱 실행 전에 환경부터 해결합니다.
 
-## 2. 프로젝트 받기
+## 2. 프로젝트 폴더로 이동
 
 ```powershell
-git clone https://github.com/mooooonmin/vlm_poc.git
-cd vlm_poc
+cd <전달받은_프로젝트_폴더>
 ```
 
-이미 받은 폴더가 있다면 해당 폴더에서 최신 코드를 받습니다.
-
-```powershell
-git pull
-```
+프로젝트는 별도로 전달받는 것을 기준으로 합니다. 위 명령에서 `<전달받은_프로젝트_폴더>`는 실제 압축 해제 또는 전달받은 폴더 경로로 바꿉니다.
 
 ## 3. Python 가상환경 준비
 

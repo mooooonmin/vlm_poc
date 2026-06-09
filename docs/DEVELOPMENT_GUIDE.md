@@ -17,8 +17,7 @@
 ## 2. 설치
 
 ```powershell
-git clone https://github.com/mooooonmin/vlm_poc.git
-cd vlm_poc
+cd <전달받은_프로젝트_폴더>
 .\scripts\setup_venv.ps1
 .\.venv\Scripts\Activate.ps1
 ```
