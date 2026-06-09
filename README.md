@@ -39,6 +39,7 @@ http://127.0.0.1:8080
 | 문서 | 내용 |
 | --- | --- |
 | `docs/DEVELOPMENT_GUIDE.md` | 설치, 실행, 기본 테스트 순서 |
+| `docs/DEPLOYMENT_GUIDE.md` | Docker/vLLM 서빙과 Kubernetes 검증 절차 |
 | `docs/CONFIGURATION.md` | 환경변수와 기본 설정 |
 | `docs/ARCHITECTURE.md` | 처리 흐름과 주요 모듈 구조 |
 | `docs/TROUBLESHOOTING.md` | 자주 나는 오류와 확인 방법 |
