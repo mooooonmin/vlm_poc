@@ -466,12 +466,7 @@ function renderJob(job) {
   $("jobStatus").textContent = `${job.source?.name || job.job_id} · ${job.status}${workerText}${durationText}${samplingText}`;
   $("analyzeStatus").textContent = `현재: ${job.status}`;
   renderVideoPreview(job);
-  $("frames").innerHTML = (job.frames || []).map((frame) => `
-    <div class="frame-card">
-      <img src="${frame.preview_url}" alt="sample frame ${frame.index}" />
-      <div>#${frame.index} / ${Number(frame.timestamp_sec || 0).toFixed(2)}초</div>
-    </div>
-  `).join("");
+  renderFrameCards(job.frames || []);
   if (job.status === "done") {
     $("answer").textContent = job.answer || "(응답 텍스트 없음)";
   } else if (job.status === "failed") {
@@ -480,6 +475,47 @@ function renderJob(job) {
     $("answer").textContent = `분석 중 · 프레임 ${sampledCount}개`;
   }
   $("jobLogPath").textContent = job.job_dir ? `로그: ${job.job_dir}\\job.json` : "";
+}
+
+// 추출 프레임은 모델 답변의 근거이므로 사용자가 직접 크게 확인할 수 있어야 합니다.
+// 각 썸네일은 버튼으로 렌더링하고, 클릭하면 같은 이미지 파일을 모달에 크게 표시합니다.
+function renderFrameCards(frames) {
+  const frameRoot = $("frames");
+  frameRoot.innerHTML = frames.map((frame) => {
+    const caption = `#${frame.index} / ${Number(frame.timestamp_sec || 0).toFixed(2)}초`;
+    return `
+      <button type="button" class="frame-card" data-frame-url="${escapeHtml(frame.preview_url)}" data-frame-caption="${escapeHtml(caption)}">
+        <img src="${escapeHtml(frame.preview_url)}" alt="${escapeHtml(`sample frame ${frame.index}`)}" />
+        <span>${escapeHtml(caption)}</span>
+      </button>
+    `;
+  }).join("");
+
+  frameRoot.querySelectorAll(".frame-card").forEach((button) => {
+    button.addEventListener("click", () => {
+      openFramePreview(button.dataset.frameUrl || "", button.dataset.frameCaption || "");
+    });
+  });
+}
+
+function openFramePreview(imageUrl, caption) {
+  if (!imageUrl) {
+    return;
+  }
+  $("framePreviewImage").src = imageUrl;
+  $("framePreviewCaption").textContent = caption;
+  $("framePreviewModal").classList.add("open");
+  $("framePreviewModal").setAttribute("aria-hidden", "false");
+  document.body.classList.add("modal-open");
+}
+
+function closeFramePreview() {
+  const modal = $("framePreviewModal");
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+  $("framePreviewImage").src = "";
+  $("framePreviewCaption").textContent = "";
+  document.body.classList.remove("modal-open");
 }
 
 // 프레임 추출 방식은 분석 정확도와 직결되므로 결과 상단에 짧게 표시합니다.
@@ -580,6 +616,14 @@ function escapeHtml(value) {
 }
 
 $("analyzeForm").addEventListener("submit", submitAnalysis);
+document.querySelectorAll("[data-frame-close]").forEach((element) => {
+  element.addEventListener("click", closeFramePreview);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && $("framePreviewModal")?.classList.contains("open")) {
+    closeFramePreview();
+  }
+});
 refreshRuntime();
 refreshJobs();
 refreshEvaluations();

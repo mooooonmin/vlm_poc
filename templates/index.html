@@ -168,6 +168,17 @@
       </section>
     </div>
   </main>
+  <div id="framePreviewModal" class="frame-modal" aria-hidden="true">
+    <div class="frame-modal-backdrop" data-frame-close="true"></div>
+    <div class="frame-modal-panel" role="dialog" aria-modal="true" aria-labelledby="framePreviewTitle">
+      <div class="frame-modal-header">
+        <strong id="framePreviewTitle">프레임 미리보기</strong>
+        <button type="button" class="secondary frame-modal-close" data-frame-close="true">닫기</button>
+      </div>
+      <img id="framePreviewImage" src="" alt="선택한 추출 프레임" />
+      <div id="framePreviewCaption" class="frame-modal-caption"></div>
+    </div>
+  </div>
   <script src="/static/app.js"></script>
 </body>
 </html>
