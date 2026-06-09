@@ -1,6 +1,6 @@
-# Kubernetes Time-slicing 적용 패키지
+# Kubernetes Time-slicing 검증 절차
 
-이 폴더는 Linux/Kubernetes GPU 노드에서 vLLM PoC를 검증하기 위한 초안입니다. 로컬 Windows/Docker 환경에서는 실제 time-slicing을 적용하지 않습니다.
+이 폴더는 Linux/Kubernetes GPU 노드에서 time-slicing과 vLLM Pod 실행을 검증하기 위한 초안입니다. 로컬 Windows/Docker 환경에서는 time-slicing을 실제 적용하지 않습니다.
 
 ## 전제 조건
 
@@ -50,7 +50,7 @@ kubectl logs -n nvidia-device-plugin -l app.kubernetes.io/name=nvidia-device-plu
 kubectl describe nodes | grep -n "nvidia.com/gpu"
 ```
 
-6. vLLM PoC Deployment를 적용합니다.
+6. vLLM Deployment를 적용합니다.
 
 현재 manifest는 time-slicing 검증을 위해 vLLM Pod `replicas: 2`로 작성되어 있습니다.
 이 값은 "두 개의 vLLM 서버가 같은 GPU의 oversubscribe slot에 스케줄링되는지" 확인하기 위한 PoC 값입니다.

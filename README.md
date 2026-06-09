@@ -2,18 +2,17 @@
 
 영상 파일 또는 YouTube URL을 입력하면 프레임을 균등 샘플링하고, 샘플 프레임을 `Qwen/Qwen3-VL-2B-Instruct`에 전달해 한국어 분석 결과를 받는 PoC입니다.
 
-## 현재 범위
+## 현재 검증 범위
 
 | 항목 | 상태 |
 | --- | --- |
-| CUDA/GPU 확인 | `nvidia-smi` 기반 상태 확인 |
-| vLLM 서빙 | Docker `vllm/vllm-openai:latest` 컨테이너 사용 |
+| 로컬 PoC | Windows + Docker + RTX 4070 Ti + vLLM 단일 worker |
 | 영상 입력 | 파일 업로드, 직접 영상 URL, YouTube URL |
-| 분석 방식 | 영상 전체를 직접 넣지 않고 균등 샘플 프레임을 멀티 이미지로 전달 |
-| 다중 입력 | 화면에서 최대 3개 영상 batch 생성 |
-| worker 분산 | `VLLM_WORKERS` 환경변수 기반 endpoint 분산 준비 |
-| time-slicing | 로컬 Windows에서는 미적용. Linux/Kubernetes 검증 초안은 `k8s/` 참고 |
-| 임시파일 정리 | 화면의 `임시파일 정리` 버튼 또는 `POST /api/tmp/cleanup` |
+| 분석 방식 | 원본 영상 대신 균등 샘플 프레임을 멀티 이미지로 전달 |
+| 다중 입력 | 최대 3개 영상 batch 생성 |
+| worker 분산 | `VLLM_WORKERS` 기반 endpoint 분산 구조 준비 |
+| time-slicing | 로컬 미적용. Linux/Kubernetes GPU node에서 별도 검증 필요 |
+| 임시파일 정리 | 화면 버튼 또는 `POST /api/tmp/cleanup` |
 
 ## 실행
 
@@ -109,6 +108,6 @@ RTX 4070 Ti에서 OOM이 발생하면 샘플 프레임 수를 `4`로 낮추고, 
 | `docs/TEST_RESULTS.md` | 로컬 검증 결과 |
 | `k8s/README.md` | Linux/Kubernetes time-slicing 검증 절차 |
 
-참고 출처:
+참고 출처는 각 도구의 공식 문서를 기준으로 합니다.
 - vLLM Docker 문서: https://docs.vllm.ai/en/stable/deployment/docker.html
 - NVIDIA k8s-device-plugin: https://github.com/NVIDIA/k8s-device-plugin
