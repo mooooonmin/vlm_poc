@@ -28,7 +28,7 @@ $VenvPython = Join-Path $VenvPath "Scripts\python.exe"
 # pip 자체를 최신화합니다.
 & $VenvPython -m pip install --upgrade pip
 
-# requirements.txt는 현재 비어 있지만, 향후 의존성 추가를 대비해 항상 설치 절차를 거칩니다.
+# FastAPI, OpenCV, yt-dlp 등 PoC 실행에 필요한 Python 의존성을 설치합니다.
 & $VenvPython -m pip install -r requirements.txt
 
 Write-Host ""
