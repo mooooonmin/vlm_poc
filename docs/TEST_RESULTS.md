@@ -1,8 +1,9 @@
 # 테스트 결과 기록
 
-이 문서는 검증 결과만 관리합니다. 실행 방법과 구조 설명은 루트 `README.md`를 기준으로 봅니다.
+이 문서는 사람이 확인한 검증 결과만 관리합니다. 실행 방법과 구조 설명은 루트 `README.md`를 기준으로 봅니다.
+자동 생성 상세 로그는 `logs/evaluation/*`, `logs/timeslicing/*`에 저장되며, 임시파일 정리 대상입니다.
 
-## 로컬 환경
+## 기준 환경
 
 | 항목 | 확인 결과 | 근거 |
 | --- | --- | --- |
@@ -12,24 +13,24 @@
 | vLLM 모델 | `Qwen/Qwen3-VL-2B-Instruct`, `max_model_len=8192` | `GET http://localhost:8000/v1/models` |
 | Kubernetes | 로컬 context 미설정 또는 검증 불가 | `kubectl config current-context`, `/api/timeslicing/logs` |
 
-Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다. 현재 검증 범위는 로컬 Windows/Docker/vLLM 단일 worker입니다.
+현재 검증 범위는 로컬 Windows/Docker/vLLM 단일 worker입니다. Kubernetes time-slicing 실검증은 아직 완료되지 않았습니다.
 
-## 기능 검증 요약
+## 날짜별 테스트 기록
 
-| 일시 | 항목 | 결과 | 근거 |
-| --- | --- | --- | --- |
-| 2026-06-08 | vLLM 모델 API | 성공 | `/v1/models`에서 `Qwen/Qwen3-VL-2B-Instruct` 응답 |
-| 2026-06-08 | 영상 batch 생성 | 성공 | `/api/jobs/video-batch`, 최대 3개 입력 슬롯 |
-| 2026-06-08 | 질문 유형별 프롬프트 | 성공 | 시간 질문 `답변: 약 1.50초`, 영상 종류 질문 `답변: 확인 불가` 확인 |
-| 2026-06-08 | 원본 JSON 저장 위치 | 성공 | 화면에서는 제거, `tmp/jobs/{job_id}/job.json`의 `raw` 필드에 저장 |
-| 2026-06-08 | 프롬프트 모듈 분리 | 성공 | `prompt_utils.py` 분리 후 synthetic 시간 질문 회귀 검증 |
-| 2026-06-08 | 주석 보강 | 성공 | `app.py`, `static/app.js`, `evaluation_runner.py`, `prompt_utils.py` 보강 후 정적 검증 |
-| 2026-06-08 | 임시파일 정리 버튼 | 성공 | `POST /api/tmp/cleanup?dry_run=true`로 정리 대상 확인 |
-| 2026-06-08 | 임시파일 정리 범위 확장 | 성공 | 고아 job 폴더, 고아 프레임, 평가/검증 폴더, layout 이미지가 dry-run 대상에 포함됨 |
-| 2026-06-08 | 생성 로그 정리 범위 확장 | 성공 | `logs/evaluation/*`, `logs/timeslicing/*`가 dry-run 대상에 포함됨 |
-| 2026-06-08 | UI 레이아웃 | 성공 | 1365x768 headless screenshot 기준 3열 대시보드와 정리 버튼 표시 확인 |
+| 일시 | 환경 | 입력 영상 | 샘플 프레임 수 | 처리 결과 | 실패 원인 | 비고 |
+| --- | --- | --- | ---: | --- | --- | --- |
+| 2026-06-08 | 로컬 Docker/vLLM | 모델 API | - | 성공 | - | `/v1/models`에서 `Qwen/Qwen3-VL-2B-Instruct` 응답 |
+| 2026-06-08 | 로컬 UI/API | 영상 batch 입력 | 6 | 성공 | - | `/api/jobs/video-batch`, 최대 3개 입력 슬롯 확인 |
+| 2026-06-08 | 로컬 프롬프트 | synthetic 시간 질문 | 6 | 성공 | - | `답변: 약 1.50초` 회귀 검증 |
+| 2026-06-08 | 로컬 프롬프트 | synthetic 영상 종류 질문 | 6 | 성공 | - | 불확실한 경우 `확인 불가` 처리 확인 |
+| 2026-06-08 | 로컬 UI/API | 원본 JSON 저장 위치 | - | 성공 | - | 화면에서는 제거, `tmp/jobs/{job_id}/job.json`의 `raw` 필드에 저장 |
+| 2026-06-08 | 로컬 정적 검증 | 프롬프트 모듈 분리 | - | 성공 | - | `prompt_utils.py` 분리 후 정적 검증 |
+| 2026-06-08 | 로컬 정적 검증 | 주석 보강 | - | 성공 | - | `app.py`, `static/app.js`, `evaluation_runner.py`, `prompt_utils.py` 보강 |
+| 2026-06-08 | 로컬 API | 임시파일 정리 | - | 성공 | - | `POST /api/tmp/cleanup?dry_run=true`로 정리 대상 확인 |
+| 2026-06-08 | 로컬 API | 생성 로그 정리 | - | 성공 | - | `logs/evaluation/*`, `logs/timeslicing/*`가 dry-run 대상에 포함됨 |
+| 2026-06-08 | 로컬 UI | 대시보드 레이아웃 | - | 성공 | - | 1365x768 headless screenshot 기준 3열 대시보드 확인 |
 
-## 최근 확인한 정리 대상
+## 최근 정리 dry-run
 
 `POST /api/tmp/cleanup?dry_run=true` 기준입니다. 실제 삭제는 수행하지 않았습니다.
 
