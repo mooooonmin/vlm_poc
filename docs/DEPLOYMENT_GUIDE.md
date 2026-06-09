@@ -86,6 +86,34 @@ python app.py
 http://127.0.0.1:8080
 ```
 
+같은 네트워크의 다른 사용자가 접속해야 하면 FastAPI를 `0.0.0.0`으로 바인딩합니다.
+
+```powershell
+$env:APP_HOST="0.0.0.0"
+$env:APP_PORT="8080"
+python app.py
+```
+
+이 PC의 IPv4 주소를 확인합니다.
+
+```powershell
+ipconfig
+```
+
+다른 사용자의 접속 주소:
+
+```text
+http://<이_PC의_IP주소>:8080
+```
+
+예:
+
+```text
+http://192.168.0.25:8080
+```
+
+Windows 방화벽 또는 사내 보안 정책이 있으면 TCP `8080` 인바운드 허용이 필요할 수 있습니다. vLLM `8000` 포트는 FastAPI 앱이 내부적으로 호출하므로 일반 테스트 사용자에게 직접 공개하지 않는 것을 기본으로 합니다.
+
 앱 상태 확인:
 
 ```powershell
