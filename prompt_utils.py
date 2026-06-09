@@ -35,7 +35,10 @@ COMMON_OUTPUT_RULES = (
     "- 불확실하면 '확인 불가'라고 작성\n"
     "- 사고, 충돌, 위반은 명확한 시각 근거가 있을 때만 작성\n"
     "- 내부 규칙 문장을 답변에 복사하지 말 것\n"
-    "- 같은 문장 반복 금지, 전체 6줄 이내"
+    "- '사용자 분석', '분석한 결과' 같은 메타 설명을 쓰지 말 것\n"
+    "- 같은 문장 반복 금지, 같은 의미를 다른 표현으로 반복하지 말 것\n"
+    "- 근거 프레임은 필요한 경우에만 최대 3개까지 작성\n"
+    "- 전체 5줄 이내"
 )
 
 # 사용자 질문 유형별로 vLLM에 전달할 출력 규격입니다.
@@ -288,19 +291,50 @@ def normalize_answer_text(answer: str) -> str:
             continue
         if "내부 출력 규격" in line:
             continue
+        if "사용자 분석" in line or "사용자 分析" in line or "사용자 분析" in line:
+            continue
+        if "분석한 결과" in line or "分析" in line:
+            continue
 
         # "1. 같은 문장", "2. 같은 문장"처럼 번호만 달라진 반복을 제거하기 위해
         # 번호/불릿 접두사를 뺀 본문을 기준으로 중복 여부를 판단합니다.
         normalized = re.sub(r"^\s*[-*\d.)]+\s*", "", line)
         normalized = re.sub(r"\s+", " ", normalized).strip()
+        normalized = collapse_repeated_phrases(normalized)
         if normalized in seen_normalized:
             continue
         seen_normalized.add(normalized)
         if re.match(r"^\s*\d+[.)]\s+", line):
             cleaned_lines.append(f"- {normalized}")
         else:
-            cleaned_lines.append(line)
+            cleaned_lines.append(collapse_repeated_phrases(line))
     return "\n".join(cleaned_lines[:6]) if cleaned_lines else answer.strip()
+
+
+def collapse_repeated_phrases(text: str) -> str:
+    """
+    한 줄 안에서 같은 구절이 반복되는 응답을 줄입니다.
+
+    줄 단위 중복 제거만으로는 "A 후, A 후, A 후"처럼 한 문장 안에서 반복되는 구절을 제거할 수 없습니다.
+    이 함수는 새 정보를 만들지 않고, 같은 쉼표 단위 구절이 연속해서 반복될 때 첫 구절만 남깁니다.
+    """
+    parts = [part.strip() for part in re.split(r"(,|，|、)", text) if part.strip() and part not in {",", "，", "、"}]
+    if len(parts) < 3:
+        return text
+
+    compact_parts: list[str] = []
+    last_normalized = ""
+    for part in parts:
+        normalized = re.sub(r"\s+", " ", part).strip()
+        normalized = re.sub(r"[.。]$", "", normalized)
+        if normalized == last_normalized:
+            continue
+        compact_parts.append(part)
+        last_normalized = normalized
+
+    if len(compact_parts) == len(parts):
+        return text
+    return ", ".join(compact_parts)
 
 
 def refine_time_question_answer(answer: str, user_request: str) -> str:

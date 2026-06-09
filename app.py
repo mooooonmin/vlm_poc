@@ -455,7 +455,8 @@ def mark_job_failed(
         "message": message,
         "finished_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "failure_stage": failure_stage,
-        "failure_reason": type(error).__name__,
+        "failure_reason": message,
+        "failure_type": type(error).__name__,
         "loop_checks": {
             "1_korean_response": "skipped" if failure_stage != "vllm_request" else "failed",
             "2_real_video_stats": "failed" if failure_stage in {"input_prepare", "video_download", "frame_extract"} else "done",
@@ -485,11 +486,11 @@ def classify_user_error(error: Exception) -> str:
     text = str(error)
     lowered = text.lower()
     if "yt-dlp" in lowered:
-        return f"YouTube/플랫폼 영상 다운로드에 실패했습니다. 비공개, 연령 제한, 지역 제한, 네트워크 차단 여부를 확인하세요. 원문: {text}"
+        return "YouTube/플랫폼 영상 다운로드에 실패했습니다. 비공개, 연령 제한, 지역 제한, 네트워크 차단 여부를 확인하세요."
     if "opencv" in lowered or "열 수 없습니다" in text or "frame" in lowered:
-        return f"OpenCV가 영상을 열거나 프레임을 읽지 못했습니다. 파일 형식 또는 다운로드 결과를 확인하세요. 원문: {text}"
+        return "OpenCV가 영상을 열거나 프레임을 읽지 못했습니다. 파일 형식 또는 다운로드 결과를 확인하세요."
     if "vllm" in lowered or "/v1/models" in lowered:
-        return f"vLLM 서버가 아직 준비되지 않았거나 응답하지 않습니다. 상단 상태와 vLLM 로그를 확인하세요. 원문: {text}"
+        return "vLLM 서버가 아직 준비되지 않았거나 응답하지 않습니다. 상단 상태와 vLLM 로그를 확인하세요."
     return text
 
 
