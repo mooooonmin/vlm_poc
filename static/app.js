@@ -45,7 +45,7 @@ async function refreshRuntime() {
     `모델: ${config.default_model_id}`,
     `worker ${(workers.workers || []).length}개`,
     config.processing_mode,
-    `vLLM 전송 상한 ${config.max_vllm_input_frames || "-"}장`,
+    `vLLM 전송 ${config.max_vllm_input_frames || "-"}~${config.max_vllm_input_frames_low_token || config.max_vllm_input_frames || "-"}장`,
   ].map((text) => `<span>${escapeHtml(text)}</span>`).join("");
   applyConfigToForm(config);
   renderWorkers(workers.workers || []);

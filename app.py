@@ -78,6 +78,8 @@ MAX_SAMPLE_FRAMES = int(os.environ.get("MAX_SAMPLE_FRAMES", "120"))
 # Qwen3-VL-2B를 MAX_MODEL_LEN=8192로 띄운 현재 설정에서는 36장 입력에서도 context length 초과가 발생했습니다.
 # 그래서 기본 전송 상한은 30장으로 두고, 초과 에러가 나면 더 줄여서 1회 재시도합니다.
 MAX_VLLM_INPUT_FRAMES = int(os.environ.get("MAX_VLLM_INPUT_FRAMES", "30"))
+MAX_VLLM_INPUT_FRAMES_LOW_TOKEN = int(os.environ.get("MAX_VLLM_INPUT_FRAMES_LOW_TOKEN", "36"))
+MAX_VLLM_INPUT_FRAMES_MID_TOKEN = int(os.environ.get("MAX_VLLM_INPUT_FRAMES_MID_TOKEN", "32"))
 DEFAULT_SAMPLING_MODE = os.environ.get("DEFAULT_SAMPLING_MODE", VIDEO_DEFAULT_SAMPLING_MODE)
 DEFAULT_SEGMENT_SECONDS = int(os.environ.get("DEFAULT_SEGMENT_SECONDS", str(VIDEO_DEFAULT_SEGMENT_SECONDS)))
 DEFAULT_FRAMES_PER_SEGMENT = int(os.environ.get("DEFAULT_FRAMES_PER_SEGMENT", str(VIDEO_DEFAULT_FRAMES_PER_SEGMENT)))
@@ -114,7 +116,23 @@ def call_vllm(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
     return response.json()
 
 
-def select_vllm_input_frames(frames: list[dict[str, Any]], limit: int = MAX_VLLM_INPUT_FRAMES) -> list[dict[str, Any]]:
+def get_vllm_input_frame_limit(max_tokens: int) -> int:
+    """
+    응답 토큰 예산에 따라 vLLM에 보낼 대표 프레임 수를 계산합니다.
+
+    vLLM context length는 입력 이미지 토큰과 출력 토큰 예산을 함께 받습니다. 사용자가 긴 답변을 원하면
+    프레임 수를 보수적으로 줄이고, 짧은 답변 설정에서는 프레임 수를 약간 늘려 더 촘촘히 보게 합니다.
+    """
+    if max_tokens <= 512:
+        return max(MAX_VLLM_INPUT_FRAMES, MAX_VLLM_INPUT_FRAMES_LOW_TOKEN)
+    if max_tokens <= 768:
+        return max(MAX_VLLM_INPUT_FRAMES, MAX_VLLM_INPUT_FRAMES_MID_TOKEN)
+    if max_tokens > 1024:
+        return min(MAX_VLLM_INPUT_FRAMES, 24)
+    return MAX_VLLM_INPUT_FRAMES
+
+
+def select_vllm_input_frames(frames: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     """
     추출 프레임 중 vLLM에 실제로 보낼 대표 프레임을 고릅니다.
 
@@ -387,9 +405,12 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
 
         current_stage = "payload_prepare"
         update_job(job_id, message="프레임을 vLLM 요청용 base64 이미지로 변환하는 중입니다.")
-        vllm_frame_sources = select_vllm_input_frames(frames)
+        vllm_input_frame_limit = get_vllm_input_frame_limit(int(settings["max_tokens"]))
+        vllm_frame_sources = select_vllm_input_frames(frames, vllm_input_frame_limit)
         video_info["vllm_input_frame_count"] = len(vllm_frame_sources)
-        video_info["vllm_input_frame_limit"] = MAX_VLLM_INPUT_FRAMES
+        video_info["vllm_input_frame_limit"] = vllm_input_frame_limit
+        video_info["vllm_input_frame_limit_base"] = MAX_VLLM_INPUT_FRAMES
+        video_info["vllm_input_frame_limit_reason"] = f"max_tokens={settings['max_tokens']}"
         video_info["vllm_input_frame_reduced"] = len(vllm_frame_sources) < len(frames)
         update_job(
             job_id,
@@ -1016,6 +1037,8 @@ def api_config() -> dict[str, Any]:
         "default_max_tokens": DEFAULT_MAX_TOKENS,
         "max_sample_frames": MAX_SAMPLE_FRAMES,
         "max_vllm_input_frames": MAX_VLLM_INPUT_FRAMES,
+        "max_vllm_input_frames_mid_token": MAX_VLLM_INPUT_FRAMES_MID_TOKEN,
+        "max_vllm_input_frames_low_token": MAX_VLLM_INPUT_FRAMES_LOW_TOKEN,
         "max_batch_videos": MAX_BATCH_VIDEOS,
         "max_upload_bytes": MAX_UPLOAD_BYTES,
         "max_video_duration_sec": MAX_VIDEO_DURATION_SEC,
