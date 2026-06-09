@@ -385,13 +385,17 @@ button:disabled {
 }
 
 .check-table-wrap {
-  overflow-x: auto;
+  max-height: min(46vh, 460px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
 }
 
 .check-table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
+  table-layout: fixed;
 }
 
 .check-table th,
@@ -400,10 +404,34 @@ button:disabled {
   padding: 7px;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .check-table th {
   background: var(--surface-soft);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.check-table th:nth-child(1),
+.check-table td:nth-child(1) {
+  width: 96px;
+}
+
+.check-table th:nth-child(2),
+.check-table td:nth-child(2) {
+  width: 120px;
+}
+
+.check-table th:nth-child(3),
+.check-table td:nth-child(3) {
+  width: 130px;
+}
+
+.check-table code {
+  white-space: normal;
 }
 
 .check-status {
