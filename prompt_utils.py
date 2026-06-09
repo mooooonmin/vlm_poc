@@ -34,6 +34,8 @@ COMMON_OUTPUT_RULES = (
     "- 샘플 프레임에서 직접 보이는 근거만 사용\n"
     "- 불확실하면 '확인 불가'라고 작성\n"
     "- 사고, 충돌, 위반은 명확한 시각 근거가 있을 때만 작성\n"
+    "- '답변:' 줄은 반드시 1개만 작성\n"
+    "- '확인 불가'와 구체 답변을 동시에 쓰지 말 것\n"
     "- 내부 규칙 문장을 답변에 복사하지 말 것\n"
     "- '사용자 분석', '분석한 결과' 같은 메타 설명을 쓰지 말 것\n"
     "- 같은 문장 반복 금지, 같은 의미를 다른 표현으로 반복하지 말 것\n"
@@ -395,18 +397,43 @@ def refine_video_type_answer(answer: str, user_request: str) -> str:
     """
     if classify_question_type(user_request) != "video_type":
         return answer
-    lines = answer.splitlines()
+    lines = consolidate_answer_lines(answer).splitlines()
     if not lines:
         return answer
     first_line = lines[0].strip()
+    if first_line.startswith("답변:") and "확인 불가" not in first_line and "영상" not in first_line:
+        answer_text = first_line.split(":", 1)[1].strip()
+        rest = [line for line in lines[1:] if line.strip()]
+        return "\n".join([f"답변: {answer_text} 영상으로 보입니다.", *rest])
     if "○○" not in first_line:
-        return answer
+        return "\n".join(lines)
     rest = [line for line in lines[1:] if line.strip()]
     return "\n".join(["답변: 확인 불가", *rest])
 
 
+def consolidate_answer_lines(answer: str) -> str:
+    """
+    모델이 `답변:` 줄을 여러 개 출력한 경우 하나만 남깁니다.
+
+    실제 응답에서 `답변: 확인 불가` 다음 줄에 `답변: 교통사고`처럼 서로 충돌하는 결과가 함께
+    나오는 경우가 있습니다. 사용자는 최종 판단 하나만 봐야 하므로, 구체 답변이 있으면
+    `확인 불가`보다 구체 답변을 우선하고 나머지 `답변:` 줄은 제거합니다.
+    """
+    lines = [line.strip() for line in answer.splitlines() if line.strip()]
+    answer_lines = [line for line in lines if line.startswith("답변:")]
+    if len(answer_lines) <= 1:
+        return "\n".join(lines)
+
+    specific_answers = [line for line in answer_lines if "확인 불가" not in line and "단정 불가" not in line]
+    selected_answer = specific_answers[0] if specific_answers else answer_lines[0]
+    output = [selected_answer]
+    output.extend(line for line in lines if not line.startswith("답변:"))
+    return "\n".join(output)
+
+
 def refine_question_specific_answer(answer: str, user_request: str) -> str:
     """질문 유형별로 화면 표시용 답변 형식을 마지막으로 보정합니다."""
-    refined = refine_time_question_answer(answer, user_request)
+    refined = consolidate_answer_lines(answer)
+    refined = refine_time_question_answer(refined, user_request)
     refined = refine_video_type_answer(refined, user_request)
     return refined
