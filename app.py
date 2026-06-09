@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import queue
 import socket
@@ -157,11 +158,48 @@ def select_vllm_input_frames(frames: list[dict[str, Any]], limit: int) -> list[d
     return [frames[index] for index in selected_indexes]
 
 
+def remove_duplicate_frame_files(frames: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """
+    vLLM에 보내기 전 완전히 같은 이미지 파일을 제거합니다.
+
+    같은 프레임이 한 요청 안에 반복되면 분석 품질도 좋아지지 않고, 현재 vLLM 컨테이너에서
+    멀티모달 캐시 assertion 500 오류가 발생한 사례가 있었습니다. 파일 해시가 같은 프레임은
+    첫 번째만 유지합니다.
+    """
+    unique_frames = []
+    seen_hashes = set()
+    removed_count = 0
+    for frame in frames:
+        digest = hash_frame_file(frame)
+        if digest and digest in seen_hashes:
+            removed_count += 1
+            continue
+        if digest:
+            seen_hashes.add(digest)
+        unique_frames.append(frame)
+    return unique_frames, removed_count
+
+
+def hash_frame_file(frame: dict[str, Any]) -> str:
+    """프레임 파일의 SHA-256 해시를 반환합니다. 파일을 읽을 수 없으면 빈 문자열을 반환합니다."""
+    try:
+        return hashlib.sha256(Path(str(frame["path"])).read_bytes()).hexdigest()
+    except (KeyError, OSError):
+        return ""
+
+
 def is_context_length_error(error: requests.HTTPError) -> bool:
     """vLLM context length 초과 에러인지 확인합니다."""
     detail = error.response.text if error.response is not None else str(error)
     lowered = detail.lower()
     return "context length" in lowered or "input length" in lowered or "maximum context length" in lowered
+
+
+def is_vllm_internal_error(error: requests.HTTPError) -> bool:
+    """vLLM 내부 500 오류인지 확인합니다."""
+    status_code = error.response.status_code if error.response is not None else None
+    detail = error.response.text if error.response is not None else str(error)
+    return status_code == 500 or "InternalServerError" in detail or "internal server error" in detail.lower()
 
 
 def friendly_vllm_error_message(error: requests.HTTPError) -> str:
@@ -171,6 +209,13 @@ def friendly_vllm_error_message(error: requests.HTTPError) -> str:
         return (
             "vLLM 입력 한도를 초과했습니다. 프레임을 많이 추출해도 모델에는 일부 대표 프레임만 보낼 수 있습니다. "
             "최대 프레임 수를 낮추거나 MAX_VLLM_INPUT_FRAMES 설정을 더 낮춰 다시 시도하세요. "
+            f"원본 오류: {detail}"
+        )
+    if is_vllm_internal_error(error):
+        return (
+            "vLLM 내부 오류가 발생했습니다. 동일하거나 비슷한 이미지 프레임이 많을 때 멀티모달 캐시 처리에서 "
+            "500 오류가 날 수 있습니다. 앱은 중복 프레임 제거와 축소 재시도를 수행하며, 계속 실패하면 "
+            "vLLM 컨테이너를 재시작한 뒤 다시 테스트하세요. "
             f"원본 오류: {detail}"
         )
     return f"vLLM 요청 실패: {detail}"
@@ -406,18 +451,20 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         current_stage = "payload_prepare"
         update_job(job_id, message="프레임을 vLLM 요청용 base64 이미지로 변환하는 중입니다.")
         vllm_input_frame_limit = get_vllm_input_frame_limit(int(settings["max_tokens"]))
-        vllm_frame_sources = select_vllm_input_frames(frames, vllm_input_frame_limit)
+        vllm_candidate_frames, duplicate_frame_count = remove_duplicate_frame_files(frames)
+        vllm_frame_sources = select_vllm_input_frames(vllm_candidate_frames, vllm_input_frame_limit)
         video_info["vllm_input_frame_count"] = len(vllm_frame_sources)
         video_info["vllm_input_frame_limit"] = vllm_input_frame_limit
         video_info["vllm_input_frame_limit_base"] = MAX_VLLM_INPUT_FRAMES
         video_info["vllm_input_frame_limit_reason"] = f"max_tokens={settings['max_tokens']}"
+        video_info["vllm_duplicate_frame_count"] = duplicate_frame_count
         video_info["vllm_input_frame_reduced"] = len(vllm_frame_sources) < len(frames)
         update_job(
             job_id,
             video_info=video_info,
             message=(
                 f"추출 프레임 {len(frames)}장 중 vLLM context 한도 보호를 위해 "
-                f"대표 프레임 {len(vllm_frame_sources)}장을 전송합니다."
+                f"중복 {duplicate_frame_count}장을 제외하고 대표 프레임 {len(vllm_frame_sources)}장을 전송합니다."
             ),
         )
         sampled_frames = [
@@ -446,10 +493,11 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         try:
             raw_response = call_vllm(worker_endpoint, payload)
         except requests.HTTPError as error:
-            if not is_context_length_error(error) or len(sampled_frames) <= 1:
+            should_reduce_and_retry = is_context_length_error(error) or is_vllm_internal_error(error)
+            if not should_reduce_and_retry or len(sampled_frames) <= 1:
                 raise
             retry_limit = max(1, len(sampled_frames) // 2)
-            vllm_frame_sources = select_vllm_input_frames(frames, retry_limit)
+            vllm_frame_sources = select_vllm_input_frames(vllm_candidate_frames, retry_limit)
             sampled_frames = [
                 {
                     "index": frame["index"],
@@ -459,12 +507,13 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
                 for frame in vllm_frame_sources
             ]
             video_info["vllm_input_frame_count"] = len(sampled_frames)
-            video_info["vllm_context_retry_used"] = True
+            video_info["vllm_reduce_retry_used"] = True
+            video_info["vllm_reduce_retry_reason"] = "context_length" if is_context_length_error(error) else "internal_server_error"
             update_job(
                 job_id,
                 video_info=video_info,
                 message=(
-                    "vLLM 입력 길이가 모델 한도를 초과해 대표 프레임 수를 줄여 1회 재시도합니다. "
+                    "vLLM 요청이 실패해 대표 프레임 수를 줄여 1회 재시도합니다. "
                     f"재시도 프레임: {len(sampled_frames)}장"
                 ),
             )
