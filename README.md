@@ -38,6 +38,7 @@ http://127.0.0.1:8080
 
 | 문서 | 내용 |
 | --- | --- |
+| `docs/QUICK_START_CHECKLIST.md` | 처음 실행할 때 순서대로 확인하는 체크리스트 |
 | `docs/DEVELOPMENT_GUIDE.md` | 설치, 실행, 기본 테스트 순서 |
 | `docs/DEPLOYMENT_GUIDE.md` | Docker/vLLM 서빙과 Kubernetes 검증 절차 |
 | `docs/CONFIGURATION.md` | 환경변수와 기본 설정 |
