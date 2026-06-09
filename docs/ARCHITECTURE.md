@@ -8,7 +8,7 @@
 브라우저
   -> FastAPI app.py
   -> 영상 저장 또는 YouTube 다운로드
-  -> OpenCV 1fps 프레임 추출
+  -> OpenCV 구간 대표 프레임 추출
   -> 프레임 JPEG base64 변환
   -> vLLM OpenAI 호환 API 호출
   -> 응답 후처리
@@ -21,7 +21,7 @@
 | 구성 | 역할 |
 | --- | --- |
 | `app.py` | FastAPI 서버, job 생성, dispatcher, API 라우트 |
-| `video_utils.py` | 업로드 저장, URL 다운로드, OpenCV 1fps 프레임 추출 |
+| `video_utils.py` | 업로드 저장, URL 다운로드, OpenCV 구간 대표 프레임/1fps 추출 |
 | `prompt_utils.py` | 질문 유형 분류, vLLM payload 생성, 응답 후처리 |
 | `runtime_utils.py` | CUDA 확인, Docker vLLM 시작/종료, time-slicing 로그 |
 | `worker_registry.py` | vLLM worker readiness와 job 배정 상태 관리 |

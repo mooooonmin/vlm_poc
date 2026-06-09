@@ -1,6 +1,6 @@
 # 영상 입력 VLM 분석 PoC
 
-영상 파일 또는 YouTube URL을 입력하면 초당 1프레임을 추출하고, 추출 프레임을 `Qwen/Qwen3-VL-2B-Instruct`에 전달해 한국어 분석 결과를 받는 PoC입니다.
+영상 파일 또는 YouTube URL을 입력하면 구간별 대표 프레임을 추출하고, 추출 프레임을 `Qwen/Qwen3-VL-2B-Instruct`에 전달해 한국어 분석 결과를 받는 PoC입니다.
 
 ## 빠른 시작
 
@@ -28,7 +28,7 @@ http://127.0.0.1:8080
 | --- | --- |
 | 로컬 PoC | Windows + Docker + RTX 4070 Ti + vLLM 단일 worker |
 | 영상 입력 | 파일 업로드, 직접 영상 URL, YouTube URL |
-| 분석 방식 | 원본 영상 대신 1fps 추출 프레임을 멀티 이미지로 전달 |
+| 분석 방식 | 원본 영상 대신 구간별 대표 프레임을 멀티 이미지로 전달 |
 | 다중 입력 | 최대 3개 영상 batch 생성 |
 | worker 분산 | `VLLM_WORKERS` 기반 endpoint 분산 구조 준비 |
 | time-slicing | 로컬 미적용. Linux/Kubernetes GPU node에서 별도 검증 필요 |

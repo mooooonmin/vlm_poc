@@ -51,11 +51,15 @@ python app.py
 | --- | --- | --- |
 | `MAX_UPLOAD_BYTES` | `1073741824` | 업로드 파일 최대 크기, 기본 1GB |
 | `MAX_VIDEO_DURATION_SEC` | `1800` | 분석 허용 영상 길이, 기본 30분 |
-| `MAX_SAMPLE_FRAMES` | `120` | 1fps로 추출할 최대 프레임 수 |
+| `MAX_SAMPLE_FRAMES` | `120` | 분석용으로 추출할 최대 프레임 수 |
+| `DEFAULT_SAMPLING_MODE` | `segment` | 기본 샘플링 방식. `segment` 또는 `one_fps` |
+| `DEFAULT_SEGMENT_SECONDS` | `5` | 구간 프레임 방식의 구간 길이 |
+| `DEFAULT_FRAMES_PER_SEGMENT` | `3` | 구간당 대표 프레임 수 |
 | `DEFAULT_MAX_TOKENS` | `1024` | 화면과 API의 기본 응답 토큰 수 |
 
 화면 입력 제한:
-- 1fps 최대 프레임 수: `1~120`, 기본 `30`
+- 샘플링 방식: 기본 `구간 프레임`, 옵션 `1fps`
+- 최대 프레임 수: `1~120`, 기본 `30`
 - 최대 토큰: `64~2048`, 기본 `1024`
 - batch 영상 수: 최대 `3`
 

@@ -69,6 +69,11 @@ function applyConfigToForm(config) {
     frameInput.value = String(config.default_frame_count);
     frameInput.dataset.configApplied = "1";
   }
+  const samplingMode = $("samplingMode");
+  if (samplingMode && config.default_sampling_mode && !samplingMode.dataset.configApplied) {
+    samplingMode.value = String(config.default_sampling_mode);
+    samplingMode.dataset.configApplied = "1";
+  }
   const tokenInput = $("maxTokens");
   if (tokenInput && config.default_max_tokens && !tokenInput.dataset.configApplied) {
     tokenInput.value = String(config.default_max_tokens);
@@ -486,7 +491,10 @@ function formatSamplingSummary(videoInfo) {
   const count = videoInfo.sampled_frame_count ?? 0;
   const limit = videoInfo.requested_max_frames ?? "-";
   const limited = videoInfo.sampling_limited ? " / 상한 도달" : "";
-  return ` / 1fps ${count}/${limit}장${limited}`;
+  const mode = videoInfo.sampling_strategy === "segment_representative_frames"
+    ? `구간 ${videoInfo.segment_seconds ?? "-"}초 x ${videoInfo.frames_per_segment ?? "-"}장`
+    : "1fps";
+  return ` / ${mode} ${count}/${limit}장${limited}`;
 }
 
 // 업로드 파일이나 URL에서 다운로드된 원본 영상을 화면에서 바로 확인합니다.

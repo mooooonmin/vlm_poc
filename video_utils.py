@@ -1,7 +1,7 @@
 """
 영상 저장, 다운로드, 프레임 샘플링 유틸리티.
 
-PoC 단계에서는 원본 영상을 모델에 직접 넣지 않고, 초당 1장씩 추출한 JPEG 프레임들을
+PoC 단계에서는 원본 영상을 모델에 직접 넣지 않고, 구간별 대표 JPEG 프레임들을
 멀티 이미지 입력으로 vLLM에 전달합니다.
 """
 
@@ -23,6 +23,9 @@ from yt_dlp import YoutubeDL
 
 
 DEFAULT_FRAME_COUNT = 30
+DEFAULT_SAMPLING_MODE = "segment"
+DEFAULT_SEGMENT_SECONDS = 5
+DEFAULT_FRAMES_PER_SEGMENT = 3
 
 
 @dataclass
@@ -46,6 +49,8 @@ class SampleResult:
     sample_interval_sec: float
     requested_max_frames: int
     sampling_limited: bool
+    segment_seconds: float | None = None
+    frames_per_segment: int | None = None
 
 
 def create_job_dir(base_dir: Path) -> Path:
@@ -161,15 +166,22 @@ def _is_youtube_url(url: str) -> bool:
     return host in {"youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
 
 
-def sample_video_frames(video_path: Path, output_dir: Path, frame_count: int) -> SampleResult:
+def sample_video_frames(
+    video_path: Path,
+    output_dir: Path,
+    frame_count: int,
+    sampling_mode: str = DEFAULT_SAMPLING_MODE,
+    segment_seconds: int = DEFAULT_SEGMENT_SECONDS,
+    frames_per_segment: int = DEFAULT_FRAMES_PER_SEGMENT,
+) -> SampleResult:
     """
-    OpenCV로 영상을 열고 초당 1프레임을 추출합니다.
+    OpenCV로 영상을 열고 분석용 대표 프레임을 추출합니다.
 
-    `frame_count`는 더 이상 "전체 영상에서 균등하게 뽑을 개수"가 아니라
-    "초당 1프레임 방식으로 최대 몇 장까지 추출할지"를 뜻합니다.
-    예를 들어 28초 영상에서 frame_count=30이면 0초부터 27초까지 28장을 추출하고,
-    60초 영상에서 frame_count=30이면 0초부터 29초까지 30장을 추출한 뒤
-    `sampling_limited=True`로 기록합니다.
+    기본값은 구간 프레임 방식입니다.
+    예: 5초 구간마다 시작/중간/끝 3장을 뽑아 사고 전/중/후 흐름을 보여줍니다.
+
+    `frame_count`는 어떤 방식에서도 "최대 추출 프레임 수"입니다.
+    1fps 방식은 1초마다 1장을 뽑고, 구간 방식은 구간별 대표 프레임을 뽑습니다.
     """
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
@@ -182,7 +194,19 @@ def sample_video_frames(video_path: Path, output_dir: Path, frame_count: int) ->
         raise ValueError("영상 프레임 수를 확인할 수 없습니다.")
 
     duration_sec = total_frames / fps if fps > 0 else 0
-    indices = _one_fps_indices(total_frames, fps, frame_count)
+    normalized_mode = sampling_mode if sampling_mode in {"segment", "one_fps"} else DEFAULT_SAMPLING_MODE
+    if normalized_mode == "one_fps":
+        indices = _one_fps_indices(total_frames, fps, frame_count)
+        strategy = "one_frame_per_second"
+        sample_interval_sec = 1.0
+        result_segment_seconds = None
+        result_frames_per_segment = None
+    else:
+        indices = _segment_indices(total_frames, fps, frame_count, segment_seconds, frames_per_segment)
+        strategy = "segment_representative_frames"
+        sample_interval_sec = float(segment_seconds)
+        result_segment_seconds = float(segment_seconds)
+        result_frames_per_segment = frames_per_segment
     job_prefix = f"{video_path.parent.name}_{uuid.uuid4().hex[:6]}"
 
     sampled: list[SampledFrame] = []
@@ -206,10 +230,12 @@ def sample_video_frames(video_path: Path, output_dir: Path, frame_count: int) ->
         total_frames=total_frames,
         duration_sec=duration_sec,
         frames=sampled,
-        sampling_strategy="one_frame_per_second",
-        sample_interval_sec=1.0,
+        sampling_strategy=strategy,
+        sample_interval_sec=sample_interval_sec,
         requested_max_frames=frame_count,
         sampling_limited=len(indices) >= frame_count and duration_sec > frame_count,
+        segment_seconds=result_segment_seconds,
+        frames_per_segment=result_frames_per_segment,
     )
 
 
@@ -237,6 +263,55 @@ def _one_fps_indices(total_frames: int, fps: float, max_frames: int) -> list[int
     last_index = total_frames - 1
     indices = [min(last_index, round(second * fps)) for second in range(second_count)]
     return sorted(set(int(index) for index in indices))
+
+
+def _segment_indices(
+    total_frames: int,
+    fps: float,
+    max_frames: int,
+    segment_seconds: int,
+    frames_per_segment: int,
+) -> list[int]:
+    """
+    구간별 대표 프레임 인덱스를 계산합니다.
+
+    각 구간에서 시작/중간/끝에 가까운 프레임을 선택합니다.
+    이렇게 하면 1fps처럼 비슷한 장면을 계속 보내는 것을 줄이고,
+    사고 전/중/후처럼 장면 변화가 있는 지점을 더 균형 있게 보여줄 수 있습니다.
+    """
+    if fps <= 0:
+        return _uniform_indices(total_frames, max_frames)
+
+    safe_segment_seconds = max(1, int(segment_seconds))
+    safe_frames_per_segment = max(1, int(frames_per_segment))
+    duration_sec = total_frames / fps
+    segment_count = max(1, math.ceil(duration_sec / safe_segment_seconds))
+    last_index = total_frames - 1
+
+    offsets = _segment_offsets(safe_frames_per_segment)
+    indices: list[int] = []
+    for segment_index in range(segment_count):
+        start_sec = segment_index * safe_segment_seconds
+        end_sec = min(duration_sec, start_sec + safe_segment_seconds)
+        if end_sec <= start_sec:
+            continue
+        for offset in offsets:
+            timestamp_sec = start_sec + (end_sec - start_sec) * offset
+            frame_index = min(last_index, max(0, round(timestamp_sec * fps)))
+            indices.append(int(frame_index))
+            if len(sorted(set(indices))) >= max_frames:
+                return sorted(set(indices))[:max_frames]
+
+    return sorted(set(indices))[:max_frames]
+
+
+def _segment_offsets(frames_per_segment: int) -> list[float]:
+    """구간 안에서 어느 위치의 프레임을 뽑을지 계산합니다."""
+    if frames_per_segment <= 1:
+        return [0.5]
+    if frames_per_segment == 2:
+        return [0.0, 0.98]
+    return [(i / (frames_per_segment - 1)) * 0.98 for i in range(frames_per_segment)]
 
 
 def _uniform_indices(total_frames: int, frame_count: int) -> list[int]:

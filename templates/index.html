@@ -87,7 +87,17 @@
           <div class="row">
             <div class="field">
               <div class="field-label-row">
-                <label for="frameCount">1fps 최대 프레임 수</label>
+                <label for="samplingMode">샘플링 방식</label>
+                <span class="range-note">기본</span>
+              </div>
+              <select id="samplingMode" name="sampling_mode">
+                <option value="segment" selected>구간 프레임</option>
+                <option value="one_fps">1fps</option>
+              </select>
+            </div>
+            <div class="field">
+              <div class="field-label-row">
+                <label for="frameCount">최대 프레임 수</label>
                 <span class="range-note">1~120</span>
               </div>
               <input id="frameCount" name="frame_count" type="number" min="1" max="120" value="30" />

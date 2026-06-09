@@ -53,6 +53,9 @@ from runtime_utils import (
 )
 from video_utils import (
     DEFAULT_FRAME_COUNT,
+    DEFAULT_FRAMES_PER_SEGMENT as VIDEO_DEFAULT_FRAMES_PER_SEGMENT,
+    DEFAULT_SAMPLING_MODE as VIDEO_DEFAULT_SAMPLING_MODE,
+    DEFAULT_SEGMENT_SECONDS as VIDEO_DEFAULT_SEGMENT_SECONDS,
     encode_frame_to_data_url,
     save_upload_file,
     sample_video_frames,
@@ -69,9 +72,11 @@ TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 # PoC 안정성을 위한 기본 제한값입니다.
-# 초당 1프레임 방식에서는 1분 영상이면 약 60장이 생성됩니다.
-# RTX 4070 Ti 12GB PoC에서는 긴 영상을 무제한으로 넣지 않도록 최대 추출 장수를 제한합니다.
+# 구간 프레임/1fps 모두에서 너무 많은 프레임을 vLLM에 한 번에 보내지 않도록 최대 추출 장수를 제한합니다.
 MAX_SAMPLE_FRAMES = int(os.environ.get("MAX_SAMPLE_FRAMES", "120"))
+DEFAULT_SAMPLING_MODE = os.environ.get("DEFAULT_SAMPLING_MODE", VIDEO_DEFAULT_SAMPLING_MODE)
+DEFAULT_SEGMENT_SECONDS = int(os.environ.get("DEFAULT_SEGMENT_SECONDS", str(VIDEO_DEFAULT_SEGMENT_SECONDS)))
+DEFAULT_FRAMES_PER_SEGMENT = int(os.environ.get("DEFAULT_FRAMES_PER_SEGMENT", str(VIDEO_DEFAULT_FRAMES_PER_SEGMENT)))
 DEFAULT_MAX_TOKENS = int(os.environ.get("DEFAULT_MAX_TOKENS", "1024"))
 MAX_BATCH_VIDEOS = 3
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
@@ -152,6 +157,7 @@ def validate_analysis_inputs(
     video_url: str,
     frame_count: int,
     max_tokens: int,
+    sampling_mode: str = DEFAULT_SAMPLING_MODE,
 ) -> None:
     """분석 요청값을 PoC 제한값 안으로 검증합니다."""
     has_upload = bool(video_file and video_file.filename)
@@ -159,7 +165,9 @@ def validate_analysis_inputs(
     if not has_upload and not has_url:
         raise HTTPException(status_code=400, detail="영상 파일 또는 영상 URL 중 하나가 필요합니다.")
     if frame_count < 1 or frame_count > MAX_SAMPLE_FRAMES:
-        raise HTTPException(status_code=400, detail=f"1fps 최대 프레임 수는 1~{MAX_SAMPLE_FRAMES} 범위여야 합니다.")
+        raise HTTPException(status_code=400, detail=f"최대 프레임 수는 1~{MAX_SAMPLE_FRAMES} 범위여야 합니다.")
+    if sampling_mode not in {"segment", "one_fps"}:
+        raise HTTPException(status_code=400, detail="샘플링 방식은 segment 또는 one_fps만 사용할 수 있습니다.")
     if max_tokens < 64 or max_tokens > 2048:
         raise HTTPException(status_code=400, detail="최대 토큰은 64~2048 범위여야 합니다.")
 
@@ -234,7 +242,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
     처리 단계:
     1. 배정된 vLLM worker 기록
     2. 업로드 파일 또는 URL 영상 준비
-    3. OpenCV로 초당 1프레임 추출
+    3. OpenCV로 구간 대표 프레임 또는 1fps 프레임 추출
     4. 프레임을 base64 data URL로 변환
     5. vLLM에 멀티이미지 분석 요청
     6. 결과와 원본 JSON을 job.json에 저장
@@ -282,8 +290,15 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         current_stage = "frame_extract"
         frame_extract_started_perf = time.perf_counter()
         update_job(job_id, frame_extract_started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-        update_job(job_id, message="OpenCV로 영상 메타데이터를 읽고 초당 1프레임을 추출하는 중입니다.")
-        sample_result = sample_video_frames(video_path, FRAME_DIR, int(settings["frame_count"]))
+        update_job(job_id, message="OpenCV로 영상 메타데이터를 읽고 분석용 대표 프레임을 추출하는 중입니다.")
+        sample_result = sample_video_frames(
+            video_path,
+            FRAME_DIR,
+            int(settings["frame_count"]),
+            str(settings.get("sampling_mode") or DEFAULT_SAMPLING_MODE),
+            int(settings.get("segment_seconds") or DEFAULT_SEGMENT_SECONDS),
+            int(settings.get("frames_per_segment") or DEFAULT_FRAMES_PER_SEGMENT),
+        )
         if sample_result.duration_sec > MAX_VIDEO_DURATION_SEC:
             raise RuntimeError(
                 f"영상 길이가 PoC 제한을 초과했습니다. "
@@ -308,6 +323,8 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             "sample_interval_sec": sample_result.sample_interval_sec,
             "requested_max_frames": sample_result.requested_max_frames,
             "sampling_limited": sample_result.sampling_limited,
+            "segment_seconds": sample_result.segment_seconds,
+            "frames_per_segment": sample_result.frames_per_segment,
         }
         frame_extract_duration_ms = elapsed_ms(frame_extract_started_perf)
         update_job(
@@ -316,7 +333,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             frames=frames,
             frame_extract_finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             frame_extract_duration_ms=frame_extract_duration_ms,
-            message=f"1fps 기준 {len(frames)}개 프레임을 추출했습니다. 프레임 추출 시간: {frame_extract_duration_ms}ms",
+            message=f"{sample_result.sampling_strategy} 기준 {len(frames)}개 프레임을 추출했습니다. 프레임 추출 시간: {frame_extract_duration_ms}ms",
         )
         append_gpu_snapshot(job_id, "frame_extract_finished")
 
@@ -536,15 +553,19 @@ async def create_video_job_from_form(
     model_id: str,
     endpoint: str,
     prompt: str,
+    sampling_mode: str = DEFAULT_SAMPLING_MODE,
     batch_id: str | None = None,
     batch_index: int | None = None,
     batch_size: int | None = None,
 ) -> dict[str, Any]:
     """폼 입력을 분석 job으로 만들고 큐에 넣습니다."""
-    validate_analysis_inputs(video_file, video_url, frame_count, max_tokens)
+    validate_analysis_inputs(video_file, video_url, frame_count, max_tokens, sampling_mode)
     source: dict[str, Any]
     settings = {
         "frame_count": frame_count,
+        "sampling_mode": sampling_mode,
+        "segment_seconds": DEFAULT_SEGMENT_SECONDS,
+        "frames_per_segment": DEFAULT_FRAMES_PER_SEGMENT,
         "max_tokens": max_tokens,
         "model_id": model_id,
         # 단일 endpoint 입력값은 호환을 위해 저장하지만, 실제 요청은 dispatcher가 배정한 worker_endpoint로 보냅니다.
@@ -628,6 +649,7 @@ async def create_video_batch_from_form(
     model_id: str,
     endpoint: str,
     prompt: str,
+    sampling_mode: str = DEFAULT_SAMPLING_MODE,
 ) -> dict[str, Any]:
     """최대 3개 영상 입력을 각각 독립 job으로 만들고 하나의 batch_id로 묶습니다."""
     # 빈 슬롯은 무시합니다.
@@ -653,6 +675,7 @@ async def create_video_batch_from_form(
             model_id,
             endpoint,
             prompt,
+            sampling_mode,
             batch_id=batch_id,
             batch_index=index,
             batch_size=batch_size,
@@ -733,13 +756,14 @@ async def api_create_video_job(
     video_file: UploadFile | None = File(default=None),
     video_url: str = Form(default=""),
     frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
+    sampling_mode: str = Form(default=DEFAULT_SAMPLING_MODE),
     max_tokens: int = Form(default=DEFAULT_MAX_TOKENS),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
     prompt: str = Form(default=DEFAULT_USER_REQUEST),
 ) -> JSONResponse:
     """영상 분석 작업을 생성하고 즉시 job 상태를 반환합니다."""
-    job = await create_video_job_from_form(video_file, video_url, frame_count, max_tokens, model_id, endpoint, prompt)
+    job = await create_video_job_from_form(video_file, video_url, frame_count, max_tokens, model_id, endpoint, prompt, sampling_mode)
     return JSONResponse(job)
 
 
@@ -752,6 +776,7 @@ async def api_create_video_batch(
     video_file_3: UploadFile | None = File(default=None),
     video_url_3: str = Form(default=""),
     frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
+    sampling_mode: str = Form(default=DEFAULT_SAMPLING_MODE),
     max_tokens: int = Form(default=DEFAULT_MAX_TOKENS),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
@@ -769,6 +794,7 @@ async def api_create_video_batch(
         model_id,
         endpoint,
         prompt,
+        sampling_mode,
     )
     return JSONResponse(batch)
 
@@ -868,6 +894,7 @@ async def api_analyze_video_compat(
     video_file: UploadFile | None = File(default=None),
     video_url: str = Form(default=""),
     frame_count: int = Form(default=DEFAULT_FRAME_COUNT),
+    sampling_mode: str = Form(default=DEFAULT_SAMPLING_MODE),
     max_tokens: int = Form(default=DEFAULT_MAX_TOKENS),
     model_id: str = Form(default=DEFAULT_MODEL_ID),
     endpoint: str = Form(default=DEFAULT_VLLM_ENDPOINT),
@@ -879,7 +906,7 @@ async def api_analyze_video_compat(
     이전에는 최종 분석 결과를 바로 반환했지만, 지금은 job_id와 현재 상태를 반환합니다.
     최신 화면은 `/api/jobs/video`를 직접 사용합니다.
     """
-    job = await create_video_job_from_form(video_file, video_url, frame_count, max_tokens, model_id, endpoint, prompt)
+    job = await create_video_job_from_form(video_file, video_url, frame_count, max_tokens, model_id, endpoint, prompt, sampling_mode)
     return JSONResponse(job)
 
 
@@ -893,6 +920,9 @@ def api_config() -> dict[str, Any]:
         "max_model_len": DEFAULT_MAX_MODEL_LEN,
         "hf_token_configured": bool(os.environ.get("HF_TOKEN")),
         "default_frame_count": DEFAULT_FRAME_COUNT,
+        "default_sampling_mode": DEFAULT_SAMPLING_MODE,
+        "default_segment_seconds": DEFAULT_SEGMENT_SECONDS,
+        "default_frames_per_segment": DEFAULT_FRAMES_PER_SEGMENT,
         "default_max_tokens": DEFAULT_MAX_TOKENS,
         "max_sample_frames": MAX_SAMPLE_FRAMES,
         "max_batch_videos": MAX_BATCH_VIDEOS,

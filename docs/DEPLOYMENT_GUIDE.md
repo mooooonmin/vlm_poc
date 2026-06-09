@@ -125,7 +125,7 @@ Invoke-RestMethod -Uri http://127.0.0.1:8080/api/workers/refresh -Method Post
 ## 7. 로컬 분석 테스트
 
 1. 웹 화면에서 영상 파일 또는 YouTube URL을 입력합니다.
-2. 1fps 최대 프레임 수는 기본 `30`으로 시작합니다.
+2. 샘플링 방식은 기본 `구간 프레임`, 최대 프레임 수는 기본 `30`으로 시작합니다.
 3. `영상 분석 batch 생성`을 누릅니다.
 4. 결과와 `tmp/jobs/{job_id}/job.json`을 확인합니다.
 
