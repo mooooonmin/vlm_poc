@@ -46,8 +46,29 @@ async function refreshRuntime() {
     `worker ${(workers.workers || []).length}개`,
     config.processing_mode,
   ].map((text) => `<span>${escapeHtml(text)}</span>`).join("");
+  applyConfigToForm(config);
   renderWorkers(workers.workers || []);
   $("runtimeDetail").textContent = JSON.stringify({ gpu, vllm, timeslicing, config, workers }, null, 2);
+}
+
+// 서버 설정값을 화면 입력 범위에 반영합니다.
+// MAX_SAMPLE_FRAMES를 환경변수로 바꾼 경우에도 사용자가 실제 허용 범위를 화면에서 알 수 있게 합니다.
+function applyConfigToForm(config) {
+  const frameInput = $("frameCount");
+  if (!frameInput || !config) {
+    return;
+  }
+  if (config.max_sample_frames) {
+    frameInput.max = String(config.max_sample_frames);
+    const note = frameInput.closest(".field")?.querySelector(".range-note");
+    if (note) {
+      note.textContent = `1~${config.max_sample_frames}`;
+    }
+  }
+  if (config.default_frame_count && !frameInput.dataset.configApplied) {
+    frameInput.value = String(config.default_frame_count);
+    frameInput.dataset.configApplied = "1";
+  }
 }
 
 async function startVllm() {
@@ -431,7 +452,8 @@ function renderJob(job) {
   const sampledCount = job.video_info?.sampled_frame_count ?? 0;
   const workerText = job.worker_id ? ` / worker: ${job.worker_id}` : "";
   const durationText = job.duration_ms == null ? "" : ` / ${job.duration_ms}ms`;
-  $("jobStatus").textContent = `${job.source?.name || job.job_id} · ${job.status}${workerText}${durationText}`;
+  const samplingText = formatSamplingSummary(job.video_info);
+  $("jobStatus").textContent = `${job.source?.name || job.job_id} · ${job.status}${workerText}${durationText}${samplingText}`;
   $("analyzeStatus").textContent = `현재: ${job.status}`;
   renderVideoPreview(job);
   $("frames").innerHTML = (job.frames || []).map((frame) => `
@@ -448,6 +470,18 @@ function renderJob(job) {
     $("answer").textContent = `분석 중 · 프레임 ${sampledCount}개`;
   }
   $("jobLogPath").textContent = job.job_dir ? `로그: ${job.job_dir}\\job.json` : "";
+}
+
+// 프레임 추출 방식은 분석 정확도와 직결되므로 결과 상단에 짧게 표시합니다.
+// sampling_limited=true이면 긴 영상에서 사용자가 지정한 최대 프레임 수까지만 추출됐다는 뜻입니다.
+function formatSamplingSummary(videoInfo) {
+  if (!videoInfo?.sampling_strategy) {
+    return "";
+  }
+  const count = videoInfo.sampled_frame_count ?? 0;
+  const limit = videoInfo.requested_max_frames ?? "-";
+  const limited = videoInfo.sampling_limited ? " / 상한 도달" : "";
+  return ` / 1fps ${count}/${limit}장${limited}`;
 }
 
 // 업로드 파일이나 URL에서 다운로드된 원본 영상을 화면에서 바로 확인합니다.

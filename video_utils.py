@@ -1,13 +1,14 @@
 """
 영상 저장, 다운로드, 프레임 샘플링 유틸리티.
 
-PoC 단계에서는 원본 영상을 모델에 직접 넣지 않고, 균등 추출한 JPEG 프레임들을
+PoC 단계에서는 원본 영상을 모델에 직접 넣지 않고, 초당 1장씩 추출한 JPEG 프레임들을
 멀티 이미지 입력으로 vLLM에 전달합니다.
 """
 
 from __future__ import annotations
 
 import base64
+import math
 import mimetypes
 import time
 import uuid
@@ -21,7 +22,7 @@ from fastapi import UploadFile
 from yt_dlp import YoutubeDL
 
 
-DEFAULT_FRAME_COUNT = 6
+DEFAULT_FRAME_COUNT = 30
 
 
 @dataclass
@@ -41,6 +42,10 @@ class SampleResult:
     total_frames: int
     duration_sec: float
     frames: list[SampledFrame]
+    sampling_strategy: str
+    sample_interval_sec: float
+    requested_max_frames: int
+    sampling_limited: bool
 
 
 def create_job_dir(base_dir: Path) -> Path:
@@ -157,7 +162,15 @@ def _is_youtube_url(url: str) -> bool:
 
 
 def sample_video_frames(video_path: Path, output_dir: Path, frame_count: int) -> SampleResult:
-    """OpenCV로 영상을 열고 전체 구간에서 프레임을 균등 추출합니다."""
+    """
+    OpenCV로 영상을 열고 초당 1프레임을 추출합니다.
+
+    `frame_count`는 더 이상 "전체 영상에서 균등하게 뽑을 개수"가 아니라
+    "초당 1프레임 방식으로 최대 몇 장까지 추출할지"를 뜻합니다.
+    예를 들어 28초 영상에서 frame_count=30이면 0초부터 27초까지 28장을 추출하고,
+    60초 영상에서 frame_count=30이면 0초부터 29초까지 30장을 추출한 뒤
+    `sampling_limited=True`로 기록합니다.
+    """
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise ValueError(f"영상을 열 수 없습니다: {video_path}")
@@ -169,7 +182,7 @@ def sample_video_frames(video_path: Path, output_dir: Path, frame_count: int) ->
         raise ValueError("영상 프레임 수를 확인할 수 없습니다.")
 
     duration_sec = total_frames / fps if fps > 0 else 0
-    indices = _uniform_indices(total_frames, frame_count)
+    indices = _one_fps_indices(total_frames, fps, frame_count)
     job_prefix = f"{video_path.parent.name}_{uuid.uuid4().hex[:6]}"
 
     sampled: list[SampledFrame] = []
@@ -193,6 +206,10 @@ def sample_video_frames(video_path: Path, output_dir: Path, frame_count: int) ->
         total_frames=total_frames,
         duration_sec=duration_sec,
         frames=sampled,
+        sampling_strategy="one_frame_per_second",
+        sample_interval_sec=1.0,
+        requested_max_frames=frame_count,
+        sampling_limited=len(indices) >= frame_count and duration_sec > frame_count,
     )
 
 
@@ -203,8 +220,27 @@ def encode_frame_to_data_url(frame_path: Path) -> str:
     return f"data:{mime_type};base64,{encoded}"
 
 
+def _one_fps_indices(total_frames: int, fps: float, max_frames: int) -> list[int]:
+    """
+    초당 1프레임 기준의 영상 프레임 인덱스를 계산합니다.
+
+    OpenCV는 "몇 초"가 아니라 "몇 번째 프레임"으로 이동하기 때문에,
+    0초, 1초, 2초 위치를 원본 FPS에 맞는 프레임 번호로 변환합니다.
+    FPS를 알 수 없는 영상은 초 단위 계산이 불가능하므로 기존처럼 전체 구간에서 균등 추출로 보정합니다.
+    """
+    count = max(1, min(max_frames, total_frames))
+    if fps <= 0:
+        return _uniform_indices(total_frames, count)
+
+    duration_sec = total_frames / fps
+    second_count = max(1, min(max_frames, math.ceil(duration_sec)))
+    last_index = total_frames - 1
+    indices = [min(last_index, round(second * fps)) for second in range(second_count)]
+    return sorted(set(int(index) for index in indices))
+
+
 def _uniform_indices(total_frames: int, frame_count: int) -> list[int]:
-    """영상 전체 구간에서 중복을 줄이며 균등한 프레임 인덱스를 계산합니다."""
+    """FPS를 알 수 없는 예외 상황에서만 사용하는 균등 추출 보정 로직입니다."""
     count = max(1, min(frame_count, total_frames))
     if count == 1:
         return [max(0, total_frames // 2)]

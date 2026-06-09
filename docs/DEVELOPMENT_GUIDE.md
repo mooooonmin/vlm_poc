@@ -12,7 +12,7 @@
 | GPU | NVIDIA GPU, `nvidia-smi` 동작 필요 |
 | vLLM | Docker 이미지 `vllm/vllm-openai:latest` |
 
-현재 검증된 GPU는 RTX 4070 Ti입니다. 다른 GPU는 VRAM 상황에 따라 `MAX_MODEL_LEN`, `GPU_MEMORY_UTILIZATION`, 샘플 프레임 수 조정이 필요할 수 있습니다.
+현재 검증된 GPU는 RTX 4070 Ti입니다. 다른 GPU는 VRAM 상황에 따라 `MAX_MODEL_LEN`, `GPU_MEMORY_UTILIZATION`, 1fps 최대 프레임 수 조정이 필요할 수 있습니다.
 
 ## 2. 설치
 
@@ -81,14 +81,14 @@ http://<이_PC의_IP주소>:8080
 ## 6. 영상 분석 테스트
 
 1. 영상 파일을 업로드하거나 YouTube URL을 입력합니다.
-2. 샘플 프레임 수는 기본 `6`으로 시작합니다.
+2. 1fps 최대 프레임 수는 기본 `30`으로 시작합니다.
 3. `영상 분석 batch 생성` 버튼을 누릅니다.
 4. 결과 영역에서 영상 미리보기, 추출 프레임, VLM 응답, job 로그 경로를 확인합니다.
 
 반복 테스트 기준:
-- `frame_count=4`: 빠른 확인
-- `frame_count=6`: 현재 기본값
-- `frame_count=8`: 더 많은 장면을 보지만 처리시간이 늘고 품질이 항상 좋아지지는 않음
+- `frame_count=30`: 30초 안팎 영상의 기본 확인
+- `frame_count=60`: 1분 안팎 영상의 세밀한 확인
+- `frame_count=120`: 긴 영상 일부 구간을 더 촘촘히 보지만 처리시간과 vLLM 입력량이 크게 늘어남
 
 ## 7. 테스트 후 정리
 

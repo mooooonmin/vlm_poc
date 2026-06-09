@@ -68,8 +68,9 @@ TEMPLATE_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 # PoC 안정성을 위한 기본 제한값입니다.
-# 너무 큰 파일이나 너무 많은 프레임을 허용하면 RTX 4070 Ti 12GB 환경에서 vLLM 요청이 쉽게 실패할 수 있습니다.
-MAX_SAMPLE_FRAMES = 12
+# 초당 1프레임 방식에서는 1분 영상이면 약 60장이 생성됩니다.
+# RTX 4070 Ti 12GB PoC에서는 긴 영상을 무제한으로 넣지 않도록 최대 추출 장수를 제한합니다.
+MAX_SAMPLE_FRAMES = int(os.environ.get("MAX_SAMPLE_FRAMES", "120"))
 MAX_BATCH_VIDEOS = 3
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_BYTES", str(1024 * 1024 * 1024)))
 MAX_VIDEO_DURATION_SEC = int(os.environ.get("MAX_VIDEO_DURATION_SEC", "1800"))
@@ -156,7 +157,7 @@ def validate_analysis_inputs(
     if not has_upload and not has_url:
         raise HTTPException(status_code=400, detail="영상 파일 또는 영상 URL 중 하나가 필요합니다.")
     if frame_count < 1 or frame_count > MAX_SAMPLE_FRAMES:
-        raise HTTPException(status_code=400, detail=f"샘플 프레임 수는 1~{MAX_SAMPLE_FRAMES} 범위여야 합니다.")
+        raise HTTPException(status_code=400, detail=f"1fps 최대 프레임 수는 1~{MAX_SAMPLE_FRAMES} 범위여야 합니다.")
     if max_tokens < 64 or max_tokens > 2048:
         raise HTTPException(status_code=400, detail="최대 토큰은 64~2048 범위여야 합니다.")
 
@@ -231,7 +232,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
     처리 단계:
     1. 배정된 vLLM worker 기록
     2. 업로드 파일 또는 URL 영상 준비
-    3. OpenCV로 균등 프레임 추출
+    3. OpenCV로 초당 1프레임 추출
     4. 프레임을 base64 data URL로 변환
     5. vLLM에 멀티이미지 분석 요청
     6. 결과와 원본 JSON을 job.json에 저장
@@ -279,7 +280,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
         current_stage = "frame_extract"
         frame_extract_started_perf = time.perf_counter()
         update_job(job_id, frame_extract_started_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-        update_job(job_id, message="OpenCV로 영상 메타데이터와 샘플 프레임을 추출하는 중입니다.")
+        update_job(job_id, message="OpenCV로 영상 메타데이터를 읽고 초당 1프레임을 추출하는 중입니다.")
         sample_result = sample_video_frames(video_path, FRAME_DIR, int(settings["frame_count"]))
         if sample_result.duration_sec > MAX_VIDEO_DURATION_SEC:
             raise RuntimeError(
@@ -301,6 +302,10 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             "frame_count": sample_result.total_frames,
             "duration_sec": sample_result.duration_sec,
             "sampled_frame_count": len(sample_result.frames),
+            "sampling_strategy": sample_result.sampling_strategy,
+            "sample_interval_sec": sample_result.sample_interval_sec,
+            "requested_max_frames": sample_result.requested_max_frames,
+            "sampling_limited": sample_result.sampling_limited,
         }
         frame_extract_duration_ms = elapsed_ms(frame_extract_started_perf)
         update_job(
@@ -309,7 +314,7 @@ def process_analysis_job(job_id: str, worker: dict[str, Any]) -> None:
             frames=frames,
             frame_extract_finished_at=time.strftime("%Y-%m-%d %H:%M:%S"),
             frame_extract_duration_ms=frame_extract_duration_ms,
-            message=f"{len(frames)}개 프레임을 추출했습니다. 프레임 추출 시간: {frame_extract_duration_ms}ms",
+            message=f"1fps 기준 {len(frames)}개 프레임을 추출했습니다. 프레임 추출 시간: {frame_extract_duration_ms}ms",
         )
         append_gpu_snapshot(job_id, "frame_extract_finished")
 
@@ -858,6 +863,7 @@ def api_config() -> dict[str, Any]:
         "gpu_memory_utilization": DEFAULT_GPU_MEMORY_UTILIZATION,
         "max_model_len": DEFAULT_MAX_MODEL_LEN,
         "hf_token_configured": bool(os.environ.get("HF_TOKEN")),
+        "default_frame_count": DEFAULT_FRAME_COUNT,
         "max_sample_frames": MAX_SAMPLE_FRAMES,
         "max_batch_videos": MAX_BATCH_VIDEOS,
         "max_upload_bytes": MAX_UPLOAD_BYTES,
